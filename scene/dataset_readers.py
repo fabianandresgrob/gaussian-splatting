@@ -13,6 +13,7 @@ import os
 import sys
 from PIL import Image
 from typing import NamedTuple
+from tqdm import tqdm
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
 from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
 import numpy as np
@@ -147,21 +148,42 @@ def storePly(path, xyz, rgb):
     ply_data.write(path)
 
 
-# def readScannetppInfo(rootdir):
-#     train_cam_infos = []
-#     test_cam_infos = []
-#     transforms_path = os.path.join(rootdir, "nerfstudio/transforms.json")
-#     images_dir = os.path.join(rootdir, "resized_images")
-#     points_txt_path = os.path.join(rootdir, "colmap/points3D.txt")
-#     camera_extrinsic_path = os.path.join(rootdir, "colmap/images.txt")
-#     camera_extrinsic = read_extrinsics_text(camera_extrinsic_path)
+def readScannetppInfo(rootdir):
+    train_cam_infos = []
+    test_cam_infos = []
+    transforms_path = os.path.join(rootdir, "nerfstudio/transforms.json")
+    images_dir = os.path.join(rootdir, "resized_images")
+    points_txt_path = os.path.join(rootdir, "colmap/points3D.txt")
+    camera_extrinsic_path = os.path.join(rootdir, "colmap/images.txt")
+    camera_extrinsic = read_extrinsics_text(camera_extrinsic_path)
 
-#     extrinsic_dict = {}
-#     for iamge_id, image in camera_extrinsic.items():
-#         filename = os.path.basename(image.name)
-#         R = np.transpose(qvec2rotmat(image.qvec))
-#         T = np.array(image.tvec)
-#         extrinsic_dict[filename] = (R, T)
+    extrinsic_dict = {}
+    for iamge_id, image in camera_extrinsic.items():
+        filename = os.path.basename(image.name)
+        R = np.transpose(qvec2rotmat(image.qvec))
+        T = np.array(image.tvec)
+        extrinsic_dict[filename] = (R, T)
+
+    ply_path = os.path.join(rootdir, "colmap/points3D.ply")
+    with open(transforms_path) as f:
+        transforms = json.load(f)
+    height = transforms["h"]
+    width = transforms["w"]
+    fx = transforms["fl_x"]
+    fy = transforms["fl_y"]
+
+    # Read frames
+    frames = transforms["frames"]
+    # Sort frames by file_path
+    frames = sorted(frames, key=lambda x: x["file_path"])
+    if len(frames) > MAX_NUM_IMAGES_PER_SCENE:
+        # Uniformly sample MAX_NUM_IMAGES_PER_SCENE frames
+        sample_indices = np.linspace(0, len(frames) - 1, MAX_NUM_IMAGES_PER_SCENE, dtype=np.int32)
+        frames = [frames[idx] for idx in sample_indices]
+    test_frames = transforms["test_frames"]
+    num_train_frames = len(frames)
+    for idx, frame in tqdm(enumerate(frames + test_frames), desc="Loading frames", total=len(frames + test_frames)):
+        R, T = extrinsic_dict[frame["file_path"]]
 
 #     ply_path = os.path.join(rootdir, "colmap/points3D.ply")
 #     with open(transforms_path) as f:
