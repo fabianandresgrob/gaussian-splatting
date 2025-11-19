@@ -33,6 +33,7 @@ class CameraInfo(NamedTuple):
     FovY: np.array
     FovX: np.array
     depth_params: dict
+    # image: np.array
     image_path: str
     image_name: str
     depth_path: str
@@ -204,8 +205,10 @@ def readScannetppInfo(rootdir):
             image=image,
             image_path=image_path,
             image_name=image_name,
+            depth_path="",
             width=image.size[0],
             height=image.size[1],
+            is_test=(idx >= num_train_frames),
         )
         if idx < num_train_frames:
             train_cam_infos.append(cam_info)

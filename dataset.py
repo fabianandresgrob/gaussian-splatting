@@ -21,9 +21,9 @@ def readScannetppInfo(rootdir):
     train_cam_infos = []
     test_cam_infos = []
     transforms_path = os.path.join(rootdir, "nerfstudio/transforms_undistorted.json")
-    images_dir = os.path.join(rootdir, "resized_images_undistorted")
-    points_txt_path = os.path.join(rootdir, "colmap/model_transformed_scaled/points3D.txt")
-    camera_extrinsic_path = os.path.join(rootdir, "colmap/model_transformed_scaled/images.txt")
+    images_dir = os.path.join(rootdir, "resized_undistorted_images")
+    points_txt_path = os.path.join(rootdir, "colmap/points3D.txt")
+    camera_extrinsic_path = os.path.join(rootdir, "colmap/images.txt")
     camera_extrinsic = read_extrinsics_text(camera_extrinsic_path)
 
     extrinsic_dict = {}
@@ -69,9 +69,9 @@ def readScannetppInfo(rootdir):
 
         image_path = os.path.join(images_dir, frame["file_path"])
         image_name = Path(image_path).stem
-        temp = Image.open(image_path)
-        image = deepcopy(temp)
-        temp.close()
+        # temp = Image.open(image_path)
+        # image = deepcopy(temp)
+        # temp.close()
         FovY = focal2fov(fy, height)
         FovX = focal2fov(fx, width)
         assert image.size[0] == width
@@ -82,11 +82,14 @@ def readScannetppInfo(rootdir):
             T=T,
             FovY=FovY,
             FovX=FovX,
-            image=image,
+            # image=image,
             image_path=image_path,
             image_name=image_name,
+            depth_path=None,
+            depth_params={},
             width=image.size[0],
             height=image.size[1],
+            is_test=(idx >= num_train_frames),
         )
         if idx < num_train_frames:
             train_cam_infos.append(cam_info)
