@@ -15,11 +15,12 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 from PIL import Image
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
+import json
+from view_selection import build_selector
 
 TENSORBOARD_FOUND = True
 
-
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_gui=False):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, view_selection_strategy, view_selection_config, use_gui=False):
     print(f"positions: init={opt.position_lr_init} final={opt.position_lr_final} delay_mult={opt.position_lr_delay_mult} max_steps={opt.position_lr_max_steps}")
     print(f"feature={opt.feature_lr} opacity={opt.opacity_lr} scaling={opt.scaling_lr} rotation={opt.rotation_lr}")
     print(f"densification: interval={opt.densification_interval} from={opt.densify_from_iter} until={opt.densify_until_iter} grad_threshold={opt.densify_grad_threshold}")
@@ -38,7 +39,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     iter_start = torch.cuda.Event(enable_timing=True)
     iter_end = torch.cuda.Event(enable_timing=True)
 
-    viewpoint_stack = None
+    # Initialize View Selector
+    strategy = view_selection_strategy
+    config = json.loads(view_selection_config)
+
+    selector = build_selector(strategy, config=config)
+
+    selector.initialize(scene.getTrainCameras())
+
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -53,9 +61,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         for _ in range(opt.optimizer_step_interval):
             # Pick a random Camera
-            if not viewpoint_stack:
-                viewpoint_stack = scene.getTrainCameras().copy()
-            viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
+            viewpoint_cam = selector.select_view(gaussians, iteration)
 
             # Render
             if (iteration - 1) == debug_from:
@@ -231,6 +237,11 @@ if __name__ == "__main__":
     parser.add_argument("--data_root", type=str, default="/menegroth/scannetpp/data/")
     parser.add_argument("--output_root", type=str, default="/menegroth/scannetpp/data/")
     parser.add_argument("--scene_id", type=str, default="2024-05-20_17-25")
+    parser.add_argument("--view_selection_strategy", type=str, default="random", 
+                        choices=["random", "fixed_prob", "epoch_based", "clustering", "no_replace"],
+                        help="Strategy for selecting views during training")
+    parser.add_argument("--view_selection_config", type=str, default="{}",
+                        help="JSON string for view selection configuration")
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -246,7 +257,7 @@ if __name__ == "__main__":
     safe_state(args.quiet)
 
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, use_gui=False)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.view_selection_strategy, args.view_selection_config, use_gui=False)
 
     # All done
     print("\nTraining complete.")
