@@ -31,7 +31,7 @@ SELECTOR_REGISTRY = {
 }
 
 
-def build_selector(selector_type: str, config: dict = None, log_dir: str = None, verbose: bool = False) -> ViewSelector:
+def build_selector(selector_type: str, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None) -> ViewSelector:
     """
     Factory function to create a view selector.
 
@@ -44,6 +44,7 @@ def build_selector(selector_type: str, config: dict = None, log_dir: str = None,
         config: Configuration dictionary for the selector (strategy-specific)
         log_dir: Directory to save selection logs
         verbose: If True, print detailed information
+        seed: Random seed for reproducibility
 
     Returns:
         Initialized ViewSelector instance
@@ -57,7 +58,7 @@ def build_selector(selector_type: str, config: dict = None, log_dir: str = None,
 
         >>> # Create a clustering selector with custom config
         >>> config = {'n_clusters': 15, 'temperature': 0.8}
-        >>> selector = build_selector('clustering', config=config, verbose=True)
+        >>> selector = build_selector('clustering', config=config, verbose=True, seed=42)
     """
     if selector_type not in SELECTOR_REGISTRY:
         available = ', '.join(SELECTOR_REGISTRY.keys())
@@ -67,7 +68,7 @@ def build_selector(selector_type: str, config: dict = None, log_dir: str = None,
         )
 
     selector_class = SELECTOR_REGISTRY[selector_type]
-    return selector_class(config=config, log_dir=log_dir, verbose=verbose)
+    return selector_class(config=config, log_dir=log_dir, verbose=verbose, seed=seed)
 
 
 def list_selectors():

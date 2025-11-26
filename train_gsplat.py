@@ -20,7 +20,7 @@ from view_selection import build_selector
 
 TENSORBOARD_FOUND = True
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, view_selection_strategy, view_selection_config, use_gui=False):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, view_selection_strategy, view_selection_config, seed, use_gui=False):
     print(f"positions: init={opt.position_lr_init} final={opt.position_lr_final} delay_mult={opt.position_lr_delay_mult} max_steps={opt.position_lr_max_steps}")
     print(f"feature={opt.feature_lr} opacity={opt.opacity_lr} scaling={opt.scaling_lr} rotation={opt.rotation_lr}")
     print(f"densification: interval={opt.densification_interval} from={opt.densify_from_iter} until={opt.densify_until_iter} grad_threshold={opt.densify_grad_threshold}")
@@ -46,7 +46,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     except:
         config = {}
 
-    selector = build_selector(strategy, config=config)
+    selector = build_selector(strategy, config=config, seed=seed)
     selector.initialize(scene.getTrainCameras())
 
     ema_loss_for_log = 0.0
@@ -277,6 +277,7 @@ if __name__ == "__main__":
     parser.add_argument("--view_selection_strategy", type=str, default="random", 
                         choices=["random", "fixed_prob", "epoch_based", "clustering", "no_replace"])
     parser.add_argument("--view_selection_config", type=str, default="{}")
+    parser.add_argument("--seed", type=int, default=42)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -286,6 +287,6 @@ if __name__ == "__main__":
     safe_state(args.quiet)
 
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.view_selection_strategy, args.view_selection_config, use_gui=False)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.view_selection_strategy, args.view_selection_config, args.seed, use_gui=False)
 
     print("\nTraining complete.")

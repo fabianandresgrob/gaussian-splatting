@@ -24,7 +24,7 @@ class EpochBasedSelector(FixedProbabilitySelector):
     This ensures all cameras get sampled while maintaining preference for informative views.
     """
 
-    def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False):
+    def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None):
         """
         Initialize the epoch-based selector.
 
@@ -37,8 +37,9 @@ class EpochBasedSelector(FixedProbabilitySelector):
                   Higher values encourage more uniform sampling. Default: 1.0
             log_dir: Directory to save selection logs
             verbose: If True, print detailed information
+            seed: Random seed for reproducibility
         """
-        super().__init__(config, log_dir, verbose)
+        super().__init__(config, log_dir, verbose, seed=seed)
         self.penalty_strength = self.config.get('penalty_strength', 1.0)
         self.base_scores = None  # Heuristic scores before penalty
         self.epoch_selection_counts = {}  # Selection counts within current epoch

@@ -21,7 +21,7 @@ class ViewSelector(ABC):
     viewpoint to render from at each training iteration.
     """
 
-    def __init__(self, config: dict, log_dir: Optional[str] = None, verbose: bool = False):
+    def __init__(self, config: dict = None, log_dir: Optional[str] = None, verbose: bool = False, seed: int = None):
         """
         Initialize the view selector.
 
@@ -29,10 +29,14 @@ class ViewSelector(ABC):
             config: Dictionary containing strategy-specific configuration
             log_dir: Directory to save selection logs (if None, logging is disabled)
             verbose: If True, print detailed selection information
+            seed: Random seed for reproducibility
         """
-        self.config = config
+        self.config = config or {}
         self.log_dir = log_dir
         self.verbose = verbose
+        self.seed = seed
+        # Create seeded RNG for reproducibility
+        self.rng = np.random.RandomState(seed) if seed is not None else np.random
         self.selection_history = []  # List of (iteration, cam_uid, score) tuples
         self.selection_counts = {}  # Dict mapping cam_uid to selection count
         self.initialized = False
@@ -101,7 +105,7 @@ class ViewSelector(ABC):
         probs = probs / probs.sum()
 
         # Sample camera based on probabilities
-        selected_idx = np.random.choice(len(uids), p=probs)
+        selected_idx = self.rng.choice(len(uids), p=probs)
         selected_uid = uids[selected_idx]
 
         # Find the camera object

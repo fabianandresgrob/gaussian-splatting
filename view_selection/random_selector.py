@@ -14,7 +14,7 @@ class RandomSelector(ViewSelector):
     Baseline selector that assigns uniform probability to all cameras.
     """
 
-    def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False):
+    def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None):
         """
         Initialize the random selector.
 
@@ -22,8 +22,9 @@ class RandomSelector(ViewSelector):
             config: Configuration dictionary (unused for random selection)
             log_dir: Directory to save selection logs
             verbose: If True, print selection information
+            seed: Random seed for reproducibility
         """
-        super().__init__(config or {}, log_dir, verbose)
+        super().__init__(config or {}, log_dir, verbose, seed=seed)
         self.num_cameras = 0
 
     def initialize(self, all_cameras: List) -> None:

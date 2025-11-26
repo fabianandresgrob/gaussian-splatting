@@ -24,7 +24,7 @@ class ClusteringSelector(ViewSelector):
     3. Dynamically adjust based on per-cluster selection counts
     """
 
-    def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False):
+    def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None):
         """
         Initialize the clustering selector.
 
@@ -37,8 +37,9 @@ class ClusteringSelector(ViewSelector):
                   Default: 100 (recompute every 100 iterations)
             log_dir: Directory to save selection logs
             verbose: If True, print detailed information
+            seed: Random seed for reproducibility
         """
-        super().__init__(config or {}, log_dir, verbose)
+        super().__init__(config or {}, log_dir, verbose, seed=seed)
         self.n_clusters = self.config.get('n_clusters', 10)
         self.temperature = self.config.get('temperature', 1.0)
         self.use_orientation = self.config.get('use_orientation', True)
@@ -96,7 +97,7 @@ class ClusteringSelector(ViewSelector):
         features_scaled = scaler.fit_transform(features)
 
         # Perform K-Means clustering
-        self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10)
+        self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=self.seed, n_init=10)
         cluster_labels = self.kmeans.fit_predict(features_scaled)
 
         # Store cluster assignments

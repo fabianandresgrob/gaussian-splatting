@@ -23,7 +23,7 @@ class FixedProbabilitySelector(ViewSelector):
     Probabilities are computed once and remain fixed during training.
     """
 
-    def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False):
+    def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None):
         """
         Initialize the fixed probability selector.
 
@@ -35,8 +35,9 @@ class FixedProbabilitySelector(ViewSelector):
                 - diversity_weight (float): Weight for diversity heuristic. Default: 0.5
             log_dir: Directory to save selection logs
             verbose: If True, print detailed information
+            seed: Random seed for reproducibility
         """
-        super().__init__(config or {}, log_dir, verbose)
+        super().__init__(config or {}, log_dir, verbose, seed=seed)
         self.temperature = self.config.get('temperature', 1.0)
         self.distance_weight = self.config.get('distance_weight', 0.5)
         self.diversity_weight = self.config.get('diversity_weight', 0.5)

@@ -23,11 +23,9 @@ class WithoutReplacementSelector(ViewSelector):
     probability-based framework.
     """
 
-    def __init__(self, config: dict = None, log_dir: Optional[str] = None, verbose: bool = False):
-        super().__init__(config or {}, log_dir, verbose)
-        self.seed = self.config.get('seed', None)
-        # Use a RandomState for reproducible shuffles when seed is provided
-        self.rng = np.random.RandomState(self.seed) if self.seed is not None else np.random
+    def __init__(self, config: dict = None, log_dir: Optional[str] = None, verbose: bool = False, seed: int = None):
+        super().__init__(config or {}, log_dir, verbose, seed=seed)
+        # Note: self.rng is already set up by the parent class with the seed
 
         # Internal queue of uids (acts like the old viewpoint_stack)
         self._queue = []  # type: List[int]
