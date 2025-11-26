@@ -6,9 +6,28 @@ import glob
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name):
+def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
+                 iterations=30000, test_iterations=None, save_iterations=None,
+                 data_device="cuda", view_selection_config=None, extra_args=None):
     """
     Executes the modified train_gsplat.py script.
+    
+    Args:
+        repo_path: Path to the gaussian-splatting repository
+        data_path: Path to the scene data
+        output_dir: Root directory for outputs
+        strategy: View selection strategy (random, fixed_prob, epoch_based, clustering, no_replace)
+        seed: Random seed for reproducibility
+        exp_name: Experiment name (used for output folder)
+        iterations: Total training iterations (default: 30000)
+        test_iterations: List of iterations to run evaluation (default: [1000, 3000, 7000, 15000, 30000])
+        save_iterations: List of iterations to save model (default: [30000])
+        data_device: Device for data loading, "cuda" or "cpu" (default: "cuda")
+        view_selection_config: JSON string for view selection configuration (default: "{}")
+        extra_args: List of additional command line arguments (default: None)
+    
+    Returns:
+        run_dir path on success, None on failure
     """
     os.chdir(repo_path)
     
@@ -17,17 +36,34 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name):
 
     print(f"--- Starting: {exp_name} | Seed: {seed} ---")
 
+    # Set defaults
+    if test_iterations is None:
+        test_iterations = [1000, 3000, 7000, 15000, 30000]
+    if save_iterations is None:
+        save_iterations = [iterations]  # Save at final iteration by default
+    if view_selection_config is None:
+        view_selection_config = "{}"
+
     cmd = [
         "python", "train_gsplat.py",
         "--source_path", data_path,
         "--model_path", run_dir,
         "--seed", str(seed),
         "--view_selection_strategy", strategy,
-        "--test_iterations", "1000", "3000", "7000", "15000", "30000", # Granular testing for curves
-        "--save_iterations", "30000",
-        "--iterations", "30000",
-        "--data_device", "cuda" # Ensure GPU usage
+        "--view_selection_config", view_selection_config,
+        "--iterations", str(iterations),
+        "--data_device", data_device
     ]
+    
+    # Add test iterations
+    cmd.extend(["--test_iterations"] + [str(i) for i in test_iterations])
+    
+    # Add save iterations
+    cmd.extend(["--save_iterations"] + [str(i) for i in save_iterations])
+    
+    # Add any extra arguments
+    if extra_args:
+        cmd.extend(extra_args)
     
     try:
         with open(os.path.join(run_dir, "console_log.txt"), "w") as f:

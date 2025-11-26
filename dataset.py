@@ -64,31 +64,32 @@ def readScannetppInfo(rootdir):
         frames = [frame for idx, frame in enumerate(frames) if idx not in sample_indices]
 
     num_train_frames = len(frames)
+    
+    # Validate dimensions with the first image
+    first_image_path = os.path.join(images_dir, frames[0]["file_path"])
+    with Image.open(first_image_path) as img:
+        assert img.size[0] == width, f"Image width {img.size[0]} doesn't match transforms width {width}"
+        assert img.size[1] == height, f"Image height {img.size[1]} doesn't match transforms height {height}"
+    
     for idx, frame in tqdm(enumerate(frames + test_frames), desc="Loading frames", total=len(frames + test_frames)):
         R, T = extrinsic_dict[frame["file_path"]]
 
         image_path = os.path.join(images_dir, frame["file_path"])
         image_name = Path(image_path).stem
-        # temp = Image.open(image_path)
-        # image = deepcopy(temp)
-        # temp.close()
         FovY = focal2fov(fy, height)
         FovX = focal2fov(fx, width)
-        assert image.size[0] == width
-        assert image.size[1] == height
         cam_info = CameraInfo(
             uid=idx,
             R=R,
             T=T,
             FovY=FovY,
             FovX=FovX,
-            # image=image,
             image_path=image_path,
             image_name=image_name,
-            depth_path=None,
-            depth_params={},
-            width=image.size[0],
-            height=image.size[1],
+            depth_path="",
+            depth_params=None,
+            width=width,
+            height=height,
             is_test=(idx >= num_train_frames),
         )
         if idx < num_train_frames:
@@ -99,7 +100,14 @@ def readScannetppInfo(rootdir):
     # storePly(ply_path, xyz, rgb)
     # pcd = fetchPly(ply_path)
     nerf_normalization = getNerfppNorm(train_cam_infos)
-    scene_info = SceneInfo(point_cloud=pcd, train_cameras=train_cam_infos, test_cameras=test_cam_infos, nerf_normalization=nerf_normalization, ply_path=ply_path)
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+        is_nerf_synthetic=False
+    )
     return scene_info
 
 
