@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import json
 import numpy as np
 import glob
@@ -8,7 +9,8 @@ import matplotlib.pyplot as plt
 
 def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
                  iterations=30000, test_iterations=None, save_iterations=None,
-                 data_device="cuda", view_selection_config=None, extra_args=None):
+                 data_device="cuda", view_selection_config=None, extra_args=None,
+                 verbose=True):
     """
     Executes the modified train_gsplat.py script.
     
@@ -25,6 +27,7 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
         data_device: Device for data loading, "cuda" or "cpu" (default: "cuda")
         view_selection_config: JSON string for view selection configuration (default: "{}")
         extra_args: List of additional command line arguments (default: None)
+        verbose: If True, stream output to notebook in real-time. If False, only log to file. (default: True)
     
     Returns:
         run_dir path on success, None on failure
@@ -34,7 +37,10 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
     run_dir = os.path.join(output_dir, exp_name, f"seed_{seed}")
     os.makedirs(run_dir, exist_ok=True)
 
-    print(f"--- Starting: {exp_name} | Seed: {seed} ---")
+    print(f"\n{'='*60}")
+    print(f"🚀 Starting: {exp_name} | Strategy: {strategy} | Seed: {seed}")
+    print(f"{'='*60}")
+    print(f"📁 Output: {run_dir}")
 
     # Set defaults
     if test_iterations is None:
@@ -45,7 +51,7 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
         view_selection_config = "{}"
 
     cmd = [
-        "python", "train_gsplat.py",
+        "python", "-u", "train_gsplat.py",  # -u for unbuffered output
         "--source_path", data_path,
         "--model_path", run_dir,
         "--seed", str(seed),
@@ -65,13 +71,49 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
     if extra_args:
         cmd.extend(extra_args)
     
+    log_path = os.path.join(run_dir, "console_log.txt")
+    
     try:
-        with open(os.path.join(run_dir, "console_log.txt"), "w") as f:
-            subprocess.run(cmd, check=True, stdout=f, stderr=subprocess.STDOUT)
-        print(f"SUCCESS: Seed {seed} completed.")
+        if verbose:
+            # Stream output to both console and log file
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1  # Line buffered
+            )
+            
+            with open(log_path, "w") as log_file:
+                for line in process.stdout:
+                    # Write to log file
+                    log_file.write(line)
+                    log_file.flush()
+                    # Print to notebook (handle \r for progress bar updates)
+                    if '\r' in line or 'Training progress' in line:
+                        print(line, end='', flush=True)
+                    else:
+                        print(line, end='', flush=True)
+                
+            process.wait()
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, cmd)
+        else:
+            # Silent mode - just log to file
+            with open(log_path, "w") as f:
+                subprocess.run(cmd, check=True, stdout=f, stderr=subprocess.STDOUT)
+        
+        print(f"\n✅ SUCCESS: {exp_name} seed {seed} completed!")
         return run_dir
-    except subprocess.CalledProcessError:
-        print(f"FAILURE: Seed {seed} crashed. Check console_log.txt.")
+        
+    except subprocess.CalledProcessError as e:
+        print(f"\n❌ FAILURE: {exp_name} seed {seed} crashed (exit code {e.returncode})")
+        print(f"   Check log: {log_path}")
+        return None
+    except KeyboardInterrupt:
+        print(f"\n⚠️  INTERRUPTED: {exp_name} seed {seed}")
+        if 'process' in locals():
+            process.terminate()
         return None
 
 def analyze_retrospective(history_path, threshold_percent=0.01):
