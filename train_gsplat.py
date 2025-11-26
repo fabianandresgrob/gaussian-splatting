@@ -169,9 +169,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     
                     if tb_writer and (idx < 5):
-                        image = image.unsqueeze(0)
-                        # gt_image = gt_image.unsqueeze(0)
-                        viz_image = torch.nn.functional.interpolate(image, scale_factor=0.25, mode="bilinear", align_corners=False)
+                        viz_image = torch.nn.functional.interpolate(image.unsqueeze(0), scale_factor=0.25, mode="bilinear", align_corners=False)
                         tb_writer.add_images(config["name"] + "_view_{}/render".format(viewpoint.image_name), viz_image, global_step=iteration)
 
                     psnr_val = psnr(image, gt_image).mean()
