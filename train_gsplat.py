@@ -41,14 +41,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     # Initialize View Selector
     strategy = view_selection_strategy
-    config = json.loads(view_selection_config)
+    try:
+        config = json.loads(view_selection_config)
+    except:
+        config = {}
 
     selector = build_selector(strategy, config=config)
-
     selector.initialize(scene.getTrainCameras())
 
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
+    
+    # List to store metrics for retrospective analysis
+    metrics_history = []
+
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):
         iter_start.record()
@@ -60,7 +66,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             gaussians.oneupSHdegree()
 
         for _ in range(opt.optimizer_step_interval):
-            # Pick a random Camera
+            # Pick a Camera using the strategy
             viewpoint_cam = selector.select_view(gaussians, iteration)
 
             # Render
@@ -75,7 +81,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Loss
             gt_image = viewpoint_cam.original_image.cuda()
             Ll1 = l1_loss(image, gt_image)
-            # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
             loss = Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
             loss /= opt.optimizer_step_interval  # Gradient accumulation
             loss.backward()
@@ -92,14 +97,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+            # Modified to return metrics dict
+            current_metrics = training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+            
+            if current_metrics:
+                metrics_history.append(current_metrics)
+                # Save history to JSON incrementally
+                with open(os.path.join(dataset.model_path, "metrics_history.json"), "w") as f:
+                    json.dump(metrics_history, f, indent=4)
+
             if iteration in saving_iterations:
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
 
             # Densification
             if iteration < opt.densify_until_iter:
-                # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
@@ -118,7 +130,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations) or iteration == opt.iterations:
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-    eval_and_save(dataset.model_path, scene, render, (pipe, background))
+    
+    # Final evaluation
+    final_results = eval_and_save(dataset.model_path, scene, render, (pipe, background))
+    
+    # Save final summary
+    with open(os.path.join(dataset.model_path, "final_results.json"), "w") as f:
+        json.dump(final_results, f, indent=4)
 
 
 def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene: Scene, renderFunc, renderArgs):
@@ -127,15 +145,18 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
         tb_writer.add_scalar("train_loss_patches/total_loss", loss.item(), iteration)
         tb_writer.add_scalar("iter_time", elapsed, iteration)
 
+    metrics_data = None
+
     # Report test and samples of training set
     if (iteration + 1) % testing_iterations[0] == 0:
         lpips = LPIPS(net_type="vgg").to("cuda")
         torch.cuda.empty_cache()
         validation_configs = (
             {"name": "test", "cameras": scene.getTestCameras()},
-            # {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]},
             {"name": "train", "cameras": scene.getTrainCameras()[::10]},
         )
+        
+        metrics_data = {"iteration": iteration, "elapsed_time": elapsed}
 
         for config in validation_configs:
             if config["cameras"] and len(config["cameras"]) > 0:
@@ -146,28 +167,38 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 for idx, viewpoint in enumerate(config["cameras"]):
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+                    
                     if tb_writer and (idx < 5):
                         image = image.unsqueeze(0)
-                        gt_image = gt_image.unsqueeze(0)
+                        # gt_image = gt_image.unsqueeze(0)
                         viz_image = torch.nn.functional.interpolate(image, scale_factor=0.25, mode="bilinear", align_corners=False)
                         tb_writer.add_images(config["name"] + "_view_{}/render".format(viewpoint.image_name), viz_image, global_step=iteration)
-                        # if iteration == testing_iterations[0]:
-                        #     tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
 
                     psnr_val = psnr(image, gt_image).mean()
                     ssim_val = ssim(image, gt_image)
-                    lpips_val = lpips(image, gt_image)
+                    lpips_val = lpips(image.unsqueeze(0), gt_image.unsqueeze(0))
 
                     l1_test += l1_loss(image, gt_image).mean().double()
-                    # psnr_test += psnr(image, gt_image).mean().double()
                     psnr_test += psnr_val.item()
                     ssim_test += ssim_val.item()
                     lpips_test += lpips_val.item()
-                psnr_test /= len(config["cameras"])
-                ssim_test /= len(config["cameras"])
-                lpips_test /= len(config["cameras"])
-                l1_test /= len(config["cameras"])
+                
+                count = len(config["cameras"])
+                psnr_test /= count
+                ssim_test /= count
+                lpips_test /= count
+                l1_test /= count
+                
                 print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config["name"], l1_test, psnr_test))
+                
+                # Store in dict
+                metrics_data[config["name"]] = {
+                    "L1": float(l1_test),
+                    "PSNR": float(psnr_test),
+                    "SSIM": float(ssim_test),
+                    "LPIPS": float(lpips_test)
+                }
+
                 if tb_writer:
                     tb_writer.add_scalar(config["name"] + "/loss_viewpoint - l1_loss", l1_test, iteration)
                     tb_writer.add_scalar(config["name"] + "/loss_viewpoint - psnr", psnr_test, iteration)
@@ -178,6 +209,8 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar("total_points", scene.gaussians.get_xyz.shape[0], iteration)
         torch.cuda.empty_cache()
+    
+    return metrics_data
 
 
 @torch.no_grad()
@@ -214,10 +247,18 @@ def eval_and_save(model_path, scene: Scene, renderFunc, renderArgs):
         all_psnr.append(psnr_val.item())
         all_ssim.append(ssim_val.item())
         all_lpips.append(lpips_val.item())
+    
+    results = {
+        "mean_psnr": float(np.mean(all_psnr)),
+        "mean_ssim": float(np.mean(all_ssim)),
+        "mean_lpips": float(np.mean(all_lpips))
+    }
+    
     print("Evaluation results:")
-    print("PSNR: {}".format(np.mean(all_psnr)))
-    print("SSIM: {}".format(np.mean(all_ssim)))
-    print("LPIPS: {}".format(np.mean(all_lpips)))
+    print("PSNR: {}".format(results["mean_psnr"]))
+    print("SSIM: {}".format(results["mean_ssim"]))
+    print("LPIPS: {}".format(results["mean_lpips"]))
+    return results
 
 
 if __name__ == "__main__":
@@ -228,58 +269,23 @@ if __name__ == "__main__":
     pp = PipelineParams(parser)
     parser.add_argument("--debug_from", type=int, default=-1)
     parser.add_argument("--detect_anomaly", action="store_true", default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1000, 7000, 30000]) # Added 1000 for early curve
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default=None)
-
-    parser.add_argument("--data_root", type=str, default="/menegroth/scannetpp/data/")
-    parser.add_argument("--output_root", type=str, default="/menegroth/scannetpp/data/")
-    parser.add_argument("--scene_id", type=str, default="2024-05-20_17-25")
     parser.add_argument("--view_selection_strategy", type=str, default="random", 
-                        choices=["random", "fixed_prob", "epoch_based", "clustering", "no_replace"],
-                        help="Strategy for selecting views during training")
-    parser.add_argument("--view_selection_config", type=str, default="{}",
-                        help="JSON string for view selection configuration")
+                        choices=["random", "fixed_prob", "epoch_based", "clustering", "no_replace"])
+    parser.add_argument("--view_selection_config", type=str, default="{}")
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
     print("Optimizing " + args.model_path)
 
-    args.source_path = os.path.join(args.data_root, args.scene_id, "dslr")
-    args.model_path = os.path.join(args.output_root, args.scene_id, "dslr/gsplat")
-    print("Optimizing " + args.model_path)
-    # breakpoint()
-
-    # Initialize system state (RNG)
     safe_state(args.quiet)
 
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.view_selection_strategy, args.view_selection_config, use_gui=False)
 
-    # All done
     print("\nTraining complete.")
-
-
-"""
-Example usage:
-python train_gsplat.py \
-    -s /menegroth/scannetpp/data/2024-05-20_17-25/dslr \
-    -m /tmp \
-    -r 1 \
-    --test_iterations 2000 \
-    --iterations 30000 \
-    --data_device cpu
-
-    --add_points 200000 \
-
-New usage by specifying scene_id:
-python train_gsplat.py \
-    --scene_id 2024-05-20_17-25 \
-    -r 1 \
-    --test_iterations 2000 \
-    --iterations 30000 \
-    --data_device cpu
-"""

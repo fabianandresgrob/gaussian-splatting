@@ -12,9 +12,6 @@ from .selector import ViewSelector
 class RandomSelector(ViewSelector):
     """
     Baseline selector that assigns uniform probability to all cameras.
-
-    This replicates the original random selection behavior but within the new
-    probability-based framework.
     """
 
     def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False):

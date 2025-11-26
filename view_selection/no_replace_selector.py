@@ -18,6 +18,9 @@ class WithoutReplacementSelector(ViewSelector):
 
     Config options:
       - seed (int, optional): RNG seed for deterministic shuffles.
+
+    This replicates the original random selection behavior but within the new
+    probability-based framework.
     """
 
     def __init__(self, config: dict = None, log_dir: Optional[str] = None, verbose: bool = False):
