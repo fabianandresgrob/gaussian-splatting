@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
                  iterations=30000, test_iterations=None, save_iterations=None,
                  data_device="cuda", view_selection_config=None, extra_args=None,
-                 verbose=True):
+                 verbose=True, resolution=-1):
     """
     Executes the modified train_gsplat.py script.
     
@@ -28,6 +28,7 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
         view_selection_config: JSON string for view selection configuration (default: "{}")
         extra_args: List of additional command line arguments (default: None)
         verbose: If True, stream output to notebook in real-time. If False, only log to file. (default: True)
+        resolution: Image resolution factor. -1 or 1 = original, 2 = half, 4 = quarter. (default: -1)
     
     Returns:
         run_dir path on success, None on failure
@@ -38,7 +39,7 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
     os.makedirs(run_dir, exist_ok=True)
 
     print(f"\n{'='*60}")
-    print(f"🚀 Starting: {exp_name} | Strategy: {strategy} | Seed: {seed}")
+    print(f"[START] {exp_name} | Strategy: {strategy} | Seed: {seed}")
     print(f"{'='*60}")
     print(f"📁 Output: {run_dir}")
 
@@ -58,7 +59,8 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
         "--view_selection_strategy", strategy,
         "--view_selection_config", view_selection_config,
         "--iterations", str(iterations),
-        "--data_device", data_device
+        "--data_device", data_device,
+        "--resolution", str(resolution)
     ]
     
     # Add test iterations
@@ -103,15 +105,15 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
             with open(log_path, "w") as f:
                 subprocess.run(cmd, check=True, stdout=f, stderr=subprocess.STDOUT)
         
-        print(f"\n✅ SUCCESS: {exp_name} seed {seed} completed!")
+        print(f"\n[SUCCESS] {exp_name} seed {seed} completed!")
         return run_dir
         
     except subprocess.CalledProcessError as e:
-        print(f"\n❌ FAILURE: {exp_name} seed {seed} crashed (exit code {e.returncode})")
+        print(f"\n[FAILED] {exp_name} seed {seed} crashed (exit code {e.returncode})")
         print(f"   Check log: {log_path}")
         return None
     except KeyboardInterrupt:
-        print(f"\n⚠️  INTERRUPTED: {exp_name} seed {seed}")
+        print(f"\n[INTERRUPTED] {exp_name} seed {seed}")
         if 'process' in locals():
             process.terminate()
         return None
