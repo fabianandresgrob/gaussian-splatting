@@ -10,7 +10,8 @@ import matplotlib.pyplot as plt
 def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
                  iterations=30000, test_iterations=None, save_iterations=None,
                  data_device="cuda", view_selection_config=None, extra_args=None,
-                 verbose=True, resolution=-1):
+                 verbose=True, resolution=-1, logger="tensorboard", 
+                 wandb_project="3dgs-view-selection", wandb_entity=None):
     """
     Executes the modified train_gsplat.py script.
     
@@ -29,6 +30,9 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
         extra_args: List of additional command line arguments (default: None)
         verbose: If True, stream output to notebook in real-time. If False, only log to file. (default: True)
         resolution: Image resolution factor. -1 or 1 = original, 2 = half, 4 = quarter. (default: -1)
+        logger: Logging backend - "tensorboard", "wandb", or "none" (default: "tensorboard")
+        wandb_project: W&B project name when logger="wandb" (default: "3dgs-view-selection")
+        wandb_entity: W&B team/organization name when logger="wandb" (default: None = personal account)
     
     Returns:
         run_dir path on success, None on failure
@@ -41,7 +45,7 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
     print(f"\n{'='*60}")
     print(f"[START] {exp_name} | Strategy: {strategy} | Seed: {seed}")
     print(f"{'='*60}")
-    print(f"📁 Output: {run_dir}")
+    print(f"Output: {run_dir}")
 
     # Set defaults
     if test_iterations is None:
@@ -60,8 +64,15 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
         "--view_selection_config", view_selection_config,
         "--iterations", str(iterations),
         "--data_device", data_device,
-        "--resolution", str(resolution)
+        "--resolution", str(resolution),
+        "--logger", logger,
     ]
+    
+    # Add wandb project if using wandb
+    if logger == "wandb":
+        cmd.extend(["--wandb_project", wandb_project])
+        if wandb_entity:
+            cmd.extend(["--wandb_entity", wandb_entity])
     
     # Add test iterations
     cmd.extend(["--test_iterations"] + [str(i) for i in test_iterations])

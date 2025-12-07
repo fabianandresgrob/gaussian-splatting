@@ -14,18 +14,117 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from PIL import Image
 import numpy as np
-from torch.utils.tensorboard import SummaryWriter
 import json
 from view_selection import build_selector
 
-TENSORBOARD_FOUND = True
+# Optional logging backends
+TENSORBOARD_FOUND = False
+WANDB_FOUND = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, view_selection_strategy, view_selection_config, seed, use_gui=False):
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    TENSORBOARD_FOUND = True
+except ImportError:
+    pass
+
+try:
+    import wandb
+    WANDB_FOUND = True
+except ImportError:
+    pass
+
+
+class Logger:
+    """Unified logger supporting TensorBoard and Weights & Biases."""
+    
+    def __init__(self, log_dir, backend="tensorboard", project_name="3dgs-view-selection", run_name=None, config=None, entity=None):
+        self.backend = backend
+        self.log_dir = log_dir
+        self.writer = None
+        self.wandb_run = None
+        
+        if backend == "tensorboard" and TENSORBOARD_FOUND:
+            self.writer = SummaryWriter(log_dir=log_dir)
+            print(f"[Logger] TensorBoard initialized at {log_dir}")
+        elif backend == "wandb" and WANDB_FOUND:
+            self.wandb_run = wandb.init(
+                project=project_name,
+                entity=entity,  # Team/organization name, None = personal account
+                name=run_name or os.path.basename(log_dir),
+                config=config or {},
+                dir=log_dir,
+                reinit=True
+            )
+            print(f"[Logger] W&B initialized: {self.wandb_run.url}")
+        elif backend == "none":
+            print("[Logger] Logging disabled")
+        else:
+            print(f"[Logger] Backend '{backend}' not available. Logging disabled.")
+    
+    def add_scalar(self, tag, value, step):
+        if self.writer:
+            self.writer.add_scalar(tag, value, step)
+        if self.wandb_run:
+            wandb.log({tag: value}, step=step)
+    
+    def add_scalars(self, main_tag, tag_scalar_dict, step):
+        """Log multiple scalars at once."""
+        for tag, value in tag_scalar_dict.items():
+            self.add_scalar(f"{main_tag}/{tag}", value, step)
+    
+    def add_image(self, tag, img_tensor, step):
+        if self.writer:
+            self.writer.add_images(tag, img_tensor, global_step=step)
+        if self.wandb_run:
+            # Convert tensor to wandb Image
+            if img_tensor.dim() == 4:
+                img_tensor = img_tensor[0]  # Take first image if batched
+            img_np = (img_tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+            wandb.log({tag: wandb.Image(img_np)}, step=step)
+    
+    def add_histogram(self, tag, values, step):
+        if self.writer:
+            self.writer.add_histogram(tag, values, step)
+        if self.wandb_run:
+            wandb.log({tag: wandb.Histogram(values.cpu().numpy())}, step=step)
+    
+    def log_metrics(self, metrics_dict, step):
+        """Log a dictionary of metrics."""
+        if self.writer:
+            for key, value in metrics_dict.items():
+                self.writer.add_scalar(key, value, step)
+        if self.wandb_run:
+            wandb.log(metrics_dict, step=step)
+    
+    def finish(self):
+        if self.writer:
+            self.writer.close()
+        if self.wandb_run:
+            wandb.finish()
+
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, view_selection_strategy, view_selection_config, seed, logger_backend="tensorboard", wandb_project="3dgs-view-selection", wandb_entity=None, use_gui=False):
     print(f"positions: init={opt.position_lr_init} final={opt.position_lr_final} delay_mult={opt.position_lr_delay_mult} max_steps={opt.position_lr_max_steps}")
     print(f"feature={opt.feature_lr} opacity={opt.opacity_lr} scaling={opt.scaling_lr} rotation={opt.rotation_lr}")
     print(f"densification: interval={opt.densification_interval} from={opt.densify_from_iter} until={opt.densify_until_iter} grad_threshold={opt.densify_grad_threshold}")
     first_iter = 0
-    tb_writer = SummaryWriter(log_dir=dataset.model_path)
+    
+    # Initialize logger (TensorBoard, W&B, or none)
+    run_name = f"{view_selection_strategy}_seed{seed}"
+    logger_config = {
+        "strategy": view_selection_strategy,
+        "seed": seed,
+        "iterations": opt.iterations,
+        "source_path": dataset.source_path,
+    }
+    logger = Logger(
+        log_dir=dataset.model_path,
+        backend=logger_backend,
+        project_name=wandb_project,
+        run_name=run_name,
+        config=logger_config,
+        entity=wandb_entity
+    )
+    
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -98,7 +197,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Log and save
             # Modified to return metrics dict
-            current_metrics = training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+            current_metrics = training_report(logger, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             
             if current_metrics:
                 metrics_history.append(current_metrics)
@@ -137,19 +236,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # Save final summary
     with open(os.path.join(dataset.model_path, "final_results.json"), "w") as f:
         json.dump(final_results, f, indent=4)
+    
+    # Close logger
+    logger.finish()
 
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene: Scene, renderFunc, renderArgs):
-    if tb_writer:
-        tb_writer.add_scalar("train_loss_patches/l1_loss", Ll1.item(), iteration)
-        tb_writer.add_scalar("train_loss_patches/total_loss", loss.item(), iteration)
-        tb_writer.add_scalar("iter_time", elapsed, iteration)
+def training_report(logger, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene: Scene, renderFunc, renderArgs):
+    if logger:
+        logger.add_scalar("train_loss_patches/l1_loss", Ll1.item(), iteration)
+        logger.add_scalar("train_loss_patches/total_loss", loss.item(), iteration)
+        logger.add_scalar("iter_time", elapsed, iteration)
 
     metrics_data = None
 
     # Report test and samples of training set
     if (iteration + 1) % testing_iterations[0] == 0:
-        lpips = LPIPS(net_type="vgg").to("cuda")
+        lpips_fn = LPIPS(net_type="vgg").to("cuda")
         torch.cuda.empty_cache()
         validation_configs = (
             {"name": "test", "cameras": scene.getTestCameras()},
@@ -168,13 +270,13 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     
-                    if tb_writer and (idx < 5):
+                    if logger and (idx < 5):
                         viz_image = torch.nn.functional.interpolate(image.unsqueeze(0), scale_factor=0.25, mode="bilinear", align_corners=False)
-                        tb_writer.add_images(config["name"] + "_view_{}/render".format(viewpoint.image_name), viz_image, global_step=iteration)
+                        logger.add_image(config["name"] + "_view_{}/render".format(viewpoint.image_name), viz_image, iteration)
 
                     psnr_val = psnr(image, gt_image).mean()
                     ssim_val = ssim(image, gt_image)
-                    lpips_val = lpips(image.unsqueeze(0), gt_image.unsqueeze(0))
+                    lpips_val = lpips_fn(image.unsqueeze(0), gt_image.unsqueeze(0))
 
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr_val.item()
@@ -197,15 +299,15 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     "LPIPS": float(lpips_test)
                 }
 
-                if tb_writer:
-                    tb_writer.add_scalar(config["name"] + "/loss_viewpoint - l1_loss", l1_test, iteration)
-                    tb_writer.add_scalar(config["name"] + "/loss_viewpoint - psnr", psnr_test, iteration)
-                    tb_writer.add_scalar(config["name"] + "/loss_viewpoint - ssim", ssim_test, iteration)
-                    tb_writer.add_scalar(config["name"] + "/loss_viewpoint - lpips", lpips_test, iteration)
+                if logger:
+                    logger.add_scalar(config["name"] + "/loss_viewpoint - l1_loss", l1_test, iteration)
+                    logger.add_scalar(config["name"] + "/loss_viewpoint - psnr", psnr_test, iteration)
+                    logger.add_scalar(config["name"] + "/loss_viewpoint - ssim", ssim_test, iteration)
+                    logger.add_scalar(config["name"] + "/loss_viewpoint - lpips", lpips_test, iteration)
 
-        if tb_writer:
-            tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
-            tb_writer.add_scalar("total_points", scene.gaussians.get_xyz.shape[0], iteration)
+        if logger:
+            logger.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
+            logger.add_scalar("total_points", scene.gaussians.get_xyz.shape[0], iteration)
         torch.cuda.empty_cache()
     
     return metrics_data
@@ -276,6 +378,13 @@ if __name__ == "__main__":
                         choices=["random", "fixed_prob", "epoch_based", "clustering", "no_replace"])
     parser.add_argument("--view_selection_config", type=str, default="{}")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--logger", type=str, default="tensorboard",
+                        choices=["tensorboard", "wandb", "none"],
+                        help="Logging backend: tensorboard (default), wandb, or none")
+    parser.add_argument("--wandb_project", type=str, default="3dgs-view-selection",
+                        help="W&B project name (only used if --logger=wandb)")
+    parser.add_argument("--wandb_entity", type=str, default=None,
+                        help="W&B team/organization name (only used if --logger=wandb). None = personal account")
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -285,6 +394,13 @@ if __name__ == "__main__":
     safe_state(args.quiet)
 
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.view_selection_strategy, args.view_selection_config, args.seed, use_gui=False)
+    training(
+        lp.extract(args), op.extract(args), pp.extract(args), 
+        args.test_iterations, args.save_iterations, args.checkpoint_iterations, 
+        args.start_checkpoint, args.debug_from, 
+        args.view_selection_strategy, args.view_selection_config, args.seed,
+        logger_backend=args.logger, wandb_project=args.wandb_project, 
+        wandb_entity=args.wandb_entity, use_gui=False
+    )
 
     print("\nTraining complete.")
