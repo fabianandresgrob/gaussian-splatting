@@ -385,9 +385,14 @@ if __name__ == "__main__":
                         help="W&B project name (only used if --logger=wandb)")
     parser.add_argument("--wandb_entity", type=str, default=None,
                         help="W&B team/organization name (only used if --logger=wandb). None = personal account")
+    parser.add_argument("--no_save", action="store_true",
+                        help="Skip saving model checkpoints entirely (useful for hyperparameter sweeps)")
 
     args = parser.parse_args(sys.argv[1:])
-    args.save_iterations.append(args.iterations)
+    if args.no_save:
+        args.save_iterations = []  # Clear all save iterations
+    else:
+        args.save_iterations.append(args.iterations)
 
     print("Optimizing " + args.model_path)
 
