@@ -128,4 +128,4 @@ class FixedProbabilitySelector(ViewSelector):
         Returns:
             Dictionary mapping camera uid to probability
         """
-        return self.prob_dict
+        return self.fixed_probabilities
