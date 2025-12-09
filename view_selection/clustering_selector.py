@@ -4,12 +4,14 @@ Clustering-based view selection strategy.
 This selector clusters cameras by pose (position + orientation) and samples
 inversely proportional to cluster size, ensuring underrepresented viewpoints
 are prioritized.
+
+Supports both K-Means and DBSCAN clustering algorithms.
 """
 
 import numpy as np
 from typing import Dict, List
 from scipy.special import softmax
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, DBSCAN
 from sklearn.preprocessing import StandardScaler
 from .selector import ViewSelector
 
@@ -22,6 +24,8 @@ class ClusteringSelector(ViewSelector):
     1. Cluster cameras by pose (position + viewing direction)
     2. Assign probabilities inversely proportional to cluster size
     3. Dynamically adjust based on per-cluster selection counts
+
+    Supports K-Means (fixed cluster count) and DBSCAN (adaptive cluster count).
     """
 
     def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None):
@@ -30,7 +34,10 @@ class ClusteringSelector(ViewSelector):
 
         Args:
             config: Configuration dictionary with optional keys:
-                - n_clusters (int): Number of clusters. Default: 10
+                - clustering_method (str): 'kmeans' or 'dbscan'. Default: 'kmeans'
+                - n_clusters (int): Number of clusters (K-Means only). Default: 10
+                - eps (float): DBSCAN epsilon parameter. Default: 0.5
+                - min_samples (int): DBSCAN min_samples parameter. Default: 3
                 - temperature (float): Softmax temperature. Default: 1.0
                 - use_orientation (bool): Include viewing direction in clustering. Default: True
                 - update_frequency (int): How often to recompute probabilities (in iterations).
@@ -40,12 +47,15 @@ class ClusteringSelector(ViewSelector):
             seed: Random seed for reproducibility
         """
         super().__init__(config or {}, log_dir, verbose, seed=seed)
+        self.clustering_method = self.config.get('clustering_method', 'kmeans')
         self.n_clusters = self.config.get('n_clusters', 10)
+        self.eps = self.config.get('eps', 0.5)
+        self.min_samples = self.config.get('min_samples', 3)
         self.temperature = self.config.get('temperature', 1.0)
         self.use_orientation = self.config.get('use_orientation', True)
         self.update_frequency = self.config.get('update_frequency', 100)
 
-        self.kmeans = None
+        self.clusterer = None  # Will hold KMeans or DBSCAN instance
         self.camera_clusters = {}  # Maps camera uid to cluster id
         self.cluster_sizes = {}  # Maps cluster id to number of cameras
         self.cluster_selection_counts = {}  # Maps cluster id to selection count
@@ -54,7 +64,7 @@ class ClusteringSelector(ViewSelector):
 
     def initialize(self, all_cameras: List) -> None:
         """
-        Cluster cameras by pose.
+        Cluster cameras by pose using K-Means or DBSCAN.
 
         Args:
             all_cameras: List of all available Camera objects
@@ -62,16 +72,13 @@ class ClusteringSelector(ViewSelector):
         super().initialize(all_cameras)
         if self.verbose:
             print(f"[ClusteringSelector] Initializing with {len(all_cameras)} cameras")
-            print(f"[ClusteringSelector] Number of clusters: {self.n_clusters}")
+            print(f"[ClusteringSelector] Clustering method: {self.clustering_method}")
+            if self.clustering_method == 'kmeans':
+                print(f"[ClusteringSelector] Number of clusters: {self.n_clusters}")
+            else:
+                print(f"[ClusteringSelector] DBSCAN eps: {self.eps}, min_samples: {self.min_samples}")
             print(f"[ClusteringSelector] Use orientation: {self.use_orientation}")
             print(f"[ClusteringSelector] Update frequency: {self.update_frequency} iterations")
-
-        # Adjust n_clusters if there are fewer cameras
-        actual_n_clusters = min(self.n_clusters, len(all_cameras))
-        if actual_n_clusters < self.n_clusters:
-            print(f"[ClusteringSelector] Warning: Only {len(all_cameras)} cameras available, "
-                  f"reducing clusters to {actual_n_clusters}")
-            self.n_clusters = actual_n_clusters
 
         # Extract features for clustering
         features = []
@@ -96,22 +103,62 @@ class ClusteringSelector(ViewSelector):
         scaler = StandardScaler()
         features_scaled = scaler.fit_transform(features)
 
-        # Perform K-Means clustering
-        self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=self.seed, n_init=10)
-        cluster_labels = self.kmeans.fit_predict(features_scaled)
+        # Perform clustering based on method
+        if self.clustering_method == 'kmeans':
+            # Adjust n_clusters if there are fewer cameras
+            actual_n_clusters = min(self.n_clusters, len(all_cameras))
+            if actual_n_clusters < self.n_clusters:
+                print(f"[ClusteringSelector] Warning: Only {len(all_cameras)} cameras available, "
+                      f"reducing clusters to {actual_n_clusters}")
+                self.n_clusters = actual_n_clusters
+
+            # Perform K-Means clustering
+            self.clusterer = KMeans(n_clusters=self.n_clusters, random_state=self.seed, n_init=10)
+            cluster_labels = self.clusterer.fit_predict(features_scaled)
+
+        elif self.clustering_method == 'dbscan':
+            # Perform DBSCAN clustering
+            self.clusterer = DBSCAN(eps=self.eps, min_samples=self.min_samples)
+            cluster_labels = self.clusterer.fit_predict(features_scaled)
+
+            # Handle noise points (-1 label) by assigning them to a separate "outlier" cluster
+            # Find the max cluster id (excluding -1)
+            max_cluster = cluster_labels.max()
+            outlier_cluster_id = max_cluster + 1 if max_cluster >= 0 else 0
+
+            # Replace -1 with outlier cluster id
+            cluster_labels_adjusted = cluster_labels.copy()
+            cluster_labels_adjusted[cluster_labels == -1] = outlier_cluster_id
+            cluster_labels = cluster_labels_adjusted
+
+            # Determine actual number of clusters (including outlier cluster if present)
+            self.n_clusters = len(np.unique(cluster_labels))
+
+            if self.verbose:
+                n_noise = np.sum(self.clusterer.labels_ == -1)
+                n_regular_clusters = len(np.unique(self.clusterer.labels_[self.clusterer.labels_ != -1]))
+                print(f"[ClusteringSelector] DBSCAN found {n_regular_clusters} clusters")
+                if n_noise > 0:
+                    print(f"[ClusteringSelector] {n_noise} noise points assigned to outlier cluster {outlier_cluster_id}")
+
+        else:
+            raise ValueError(f"Unknown clustering method: {self.clustering_method}. "
+                           f"Must be 'kmeans' or 'dbscan'")
 
         # Store cluster assignments
         self.camera_clusters = {cam.uid: int(cluster_labels[i]) for i, cam in enumerate(all_cameras)}
 
         # Count cameras per cluster
+        unique_clusters = np.unique(cluster_labels)
         self.cluster_sizes = {}
-        for cluster_id in range(self.n_clusters):
-            self.cluster_sizes[cluster_id] = np.sum(cluster_labels == cluster_id)
+        for cluster_id in unique_clusters:
+            self.cluster_sizes[int(cluster_id)] = int(np.sum(cluster_labels == cluster_id))
 
         # Initialize selection counts
-        self.cluster_selection_counts = {i: 0 for i in range(self.n_clusters)}
+        self.cluster_selection_counts = {int(cluster_id): 0 for cluster_id in unique_clusters}
 
         if self.verbose:
+            print(f"[ClusteringSelector] Final number of clusters: {self.n_clusters}")
             print(f"[ClusteringSelector] Cluster sizes: {self.cluster_sizes}")
             avg_size = np.mean(list(self.cluster_sizes.values()))
             print(f"[ClusteringSelector] Average cluster size: {avg_size:.2f}")
@@ -131,7 +178,7 @@ class ClusteringSelector(ViewSelector):
         # Compute score for each cluster
         # Score is inversely proportional to: (cluster_size + selection_count)
         cluster_scores = {}
-        for cluster_id in range(self.n_clusters):
+        for cluster_id in self.cluster_sizes.keys():
             base_size = self.cluster_sizes[cluster_id]
             selection_count = self.cluster_selection_counts[cluster_id]
             # Higher score for smaller, less-selected clusters
@@ -203,13 +250,14 @@ class ClusteringSelector(ViewSelector):
             Dictionary with cluster statistics
         """
         stats = {
+            'clustering_method': self.clustering_method,
             'n_clusters': self.n_clusters,
             'cluster_sizes': self.cluster_sizes,
             'cluster_selection_counts': self.cluster_selection_counts,
             'selections_per_camera_per_cluster': {
                 cluster_id: self.cluster_selection_counts[cluster_id] / self.cluster_sizes[cluster_id]
                 if self.cluster_sizes[cluster_id] > 0 else 0
-                for cluster_id in range(self.n_clusters)
+                for cluster_id in self.cluster_sizes.keys()
             }
         }
         return stats
