@@ -12,6 +12,8 @@ Available strategies:
 - ClusteringSelector: Cluster-based selection for diversity
 - WithoutReplacementSelector: Baseline random sampling without Replacement
 - LossBasedSelector: Loss-driven selection prioritizing harder views
+- GaussianAwareSelector: Adaptive selection based on Gaussian visibility
+- ScheduledHybridSelector: Combines multiple selectors with time-dependent weights
 """
 
 from .selector import ViewSelector
@@ -21,6 +23,8 @@ from .epoch_selector import EpochBasedSelector
 from .clustering_selector import ClusteringSelector
 from .no_replace_selector import WithoutReplacementSelector
 from .loss_selector import LossBasedSelector
+from .gaussian_aware_selector import GaussianAwareSelector
+from .scheduled_hybrid_selector import ScheduledHybridSelector, get_standard_config, STANDARD_CONFIGS
 
 
 # Registry mapping strategy names to classes
@@ -31,6 +35,8 @@ SELECTOR_REGISTRY = {
     'clustering': ClusteringSelector,
     'no_replace': WithoutReplacementSelector,
     'loss_based': LossBasedSelector,
+    'gaussian_aware': GaussianAwareSelector,
+    'scheduled_hybrid': ScheduledHybridSelector,
 }
 
 
@@ -46,6 +52,8 @@ def build_selector(selector_type: str, config: dict = None, log_dir: str = None,
             - 'clustering': Cluster-based selection
             - 'no_replace': Random sampling without replacement
             - 'loss_based': Loss-driven selection prioritizing harder views
+            - 'gaussian_aware': Adaptive selection based on Gaussian visibility
+            - 'scheduled_hybrid': Combines multiple selectors with time-dependent weights
         config: Configuration dictionary for the selector (strategy-specific)
         log_dir: Directory to save selection logs
         verbose: If True, print detailed information
@@ -68,6 +76,14 @@ def build_selector(selector_type: str, config: dict = None, log_dir: str = None,
         >>> # Create a loss-based selector
         >>> config = {'ema_decay': 0.99, 'temperature': 1.0, 'min_samples_before_bias': 5}
         >>> selector = build_selector('loss_based', config=config, verbose=True)
+
+        >>> # Create a Gaussian-aware selector
+        >>> config = {'mode': 'inverse_density', 'update_frequency': 500}
+        >>> selector = build_selector('gaussian_aware', config=config, verbose=True)
+
+        >>> # Create a scheduled hybrid selector with preset
+        >>> config = {'preset': 'explore_then_exploit'}
+        >>> selector = build_selector('scheduled_hybrid', config=config, verbose=True)
     """
     if selector_type not in SELECTOR_REGISTRY:
         available = ', '.join(SELECTOR_REGISTRY.keys())
@@ -98,7 +114,11 @@ __all__ = [
     'ClusteringSelector',
     'WithoutReplacementSelector',
     'LossBasedSelector',
+    'GaussianAwareSelector',
+    'ScheduledHybridSelector',
     'build_selector',
     'list_selectors',
+    'get_standard_config',
+    'STANDARD_CONFIGS',
     'SELECTOR_REGISTRY',
 ]

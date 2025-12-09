@@ -366,5 +366,234 @@ def test_selection_statistics(mock_cameras_simple, mock_gaussians):
     print(f"  Most selected: camera {stats['most_selected'][0]} ({stats['most_selected'][1]} times)")
 
 
+# Test 10: GaussianAwareSelector with mock Gaussians
+def test_gaussian_aware_selector(mock_cameras_simple, mock_gaussians):
+    """Test that GaussianAwareSelector works with mock Gaussians."""
+    # Create mock Gaussians with positions
+    n_gaussians = 1000
+    gaussian_positions = torch.randn(n_gaussians, 3) * 5.0  # Random positions
+
+    # Mock the get_xyz property
+    mock_gaussians.get_xyz = gaussian_positions
+
+    # Test inverse_density mode
+    config_inverse = {
+        'mode': 'inverse_density',
+        'update_frequency': 100,
+        'temperature': 1.0
+    }
+    selector = build_selector('gaussian_aware', config=config_inverse, seed=42)
+    selector.initialize(mock_cameras_simple)
+
+    # Compute probabilities
+    probs = selector.compute_probabilities(mock_gaussians, iteration=0)
+
+    # Check probabilities sum to 1
+    prob_sum = sum(probs.values())
+    assert abs(prob_sum - 1.0) < 1e-6, f"Probabilities sum to {prob_sum}, not 1.0"
+
+    # Check that camera-Gaussian counts were computed
+    assert len(selector.camera_gaussian_counts) == len(mock_cameras_simple)
+    assert sum(selector.camera_gaussian_counts.values()) > 0, "No Gaussians visible to any camera"
+
+    print(f"✓ GaussianAwareSelector (inverse_density) working correctly")
+    print(f"  Gaussian visibility counts: {list(selector.camera_gaussian_counts.values())[:5]}...")
+
+    # Test coverage_gap mode
+    config_coverage = {
+        'mode': 'coverage_gap',
+        'update_frequency': 100,
+        'temperature': 1.0
+    }
+    selector2 = build_selector('gaussian_aware', config=config_coverage, seed=42)
+    selector2.initialize(mock_cameras_simple)
+
+    # Compute probabilities
+    probs2 = selector2.compute_probabilities(mock_gaussians, iteration=0)
+
+    # Check probabilities sum to 1
+    prob_sum2 = sum(probs2.values())
+    assert abs(prob_sum2 - 1.0) < 1e-6, f"Probabilities sum to {prob_sum2}, not 1.0"
+
+    # Check that coverage counts were initialized
+    assert selector2.coverage_counts is not None, "Coverage counts not initialized"
+    assert selector2.coverage_counts.shape[0] == n_gaussians, "Coverage counts wrong size"
+
+    print(f"✓ GaussianAwareSelector (coverage_gap) working correctly")
+
+
+# Test 11: GaussianAwareSelector coverage tracking
+def test_gaussian_aware_coverage_tracking(mock_cameras_simple, mock_gaussians):
+    """Test that coverage tracking updates correctly."""
+    n_gaussians = 100
+    gaussian_positions = torch.randn(n_gaussians, 3) * 5.0
+    mock_gaussians.get_xyz = gaussian_positions
+
+    config = {
+        'mode': 'coverage_gap',
+        'update_frequency': 50,
+        'temperature': 1.0
+    }
+    selector = build_selector('gaussian_aware', config=config, seed=42)
+    selector.initialize(mock_cameras_simple)
+
+    # Initial probabilities
+    probs = selector.compute_probabilities(mock_gaussians, iteration=0)
+
+    # Initial coverage should be all zeros
+    assert selector.coverage_counts.sum() == 0, "Initial coverage should be zero"
+
+    # Simulate some selections and update coverage
+    for i in range(10):
+        cam = selector.select_view(mock_gaussians, iteration=i)
+        selector.update_coverage_counts(mock_gaussians, cam)
+
+    # Coverage should have increased
+    assert selector.coverage_counts.sum() > 0, "Coverage counts should increase after selections"
+
+    print(f"✓ Coverage tracking working correctly")
+    print(f"  Total coverage after 10 selections: {selector.coverage_counts.sum().item():.0f}")
+
+
+# Test 12: ScheduledHybridSelector with linear schedule
+def test_scheduled_hybrid_linear(mock_cameras_simple, mock_gaussians):
+    """Test ScheduledHybridSelector with linear weight interpolation."""
+    config = {
+        'selectors': ['random', 'fixed_prob'],
+        'weights_start': [0.8, 0.2],
+        'weights_end': [0.2, 0.8],
+        'schedule_type': 'linear',
+        'max_iterations': 1000,
+    }
+
+    selector = build_selector('scheduled_hybrid', config=config, seed=42)
+    selector.initialize(mock_cameras_simple)
+
+    # Test at start (iteration 0)
+    probs_start = selector.compute_probabilities(mock_gaussians, iteration=0)
+    assert abs(sum(probs_start.values()) - 1.0) < 1e-6, "Probabilities should sum to 1.0"
+
+    # Test at middle (iteration 500)
+    probs_mid = selector.compute_probabilities(mock_gaussians, iteration=500)
+    assert abs(sum(probs_mid.values()) - 1.0) < 1e-6, "Probabilities should sum to 1.0"
+
+    # Test at end (iteration 1000)
+    probs_end = selector.compute_probabilities(mock_gaussians, iteration=1000)
+    assert abs(sum(probs_end.values()) - 1.0) < 1e-6, "Probabilities should sum to 1.0"
+
+    # Verify weights changed over time
+    weights_start = selector._get_current_weights(0)
+    weights_mid = selector._get_current_weights(500)
+    weights_end = selector._get_current_weights(1000)
+
+    # At start, should be close to [0.8, 0.2]
+    assert abs(weights_start[0] - 0.8) < 0.01
+    assert abs(weights_start[1] - 0.2) < 0.01
+
+    # At middle, should be around [0.5, 0.5]
+    assert abs(weights_mid[0] - 0.5) < 0.1
+    assert abs(weights_mid[1] - 0.5) < 0.1
+
+    # At end, should be close to [0.2, 0.8]
+    assert abs(weights_end[0] - 0.2) < 0.01
+    assert abs(weights_end[1] - 0.8) < 0.01
+
+    print(f"✓ Linear schedule: {weights_start} → {weights_mid} → {weights_end}")
+
+
+# Test 13: ScheduledHybridSelector with step schedule
+def test_scheduled_hybrid_step(mock_cameras_simple, mock_gaussians):
+    """Test ScheduledHybridSelector with step schedule."""
+    config = {
+        'selectors': ['random', 'fixed_prob', 'epoch_based'],
+        'schedule_type': 'step',
+        'milestones': [
+            [0, [0.6, 0.3, 0.1]],
+            [500, [0.3, 0.4, 0.3]],
+            [1000, [0.1, 0.2, 0.7]],
+        ],
+    }
+
+    selector = build_selector('scheduled_hybrid', config=config, seed=42)
+    selector.initialize(mock_cameras_simple)
+
+    # Test weights at different phases
+    weights_phase1 = selector._get_current_weights(0)
+    weights_phase2 = selector._get_current_weights(500)
+    weights_phase3 = selector._get_current_weights(1000)
+
+    # Phase 1: [0.6, 0.3, 0.1]
+    assert abs(weights_phase1[0] - 0.6) < 0.01
+    assert abs(weights_phase1[1] - 0.3) < 0.01
+    assert abs(weights_phase1[2] - 0.1) < 0.01
+
+    # Phase 2: [0.3, 0.4, 0.3]
+    assert abs(weights_phase2[0] - 0.3) < 0.01
+    assert abs(weights_phase2[1] - 0.4) < 0.01
+    assert abs(weights_phase2[2] - 0.3) < 0.01
+
+    # Phase 3: [0.1, 0.2, 0.7]
+    assert abs(weights_phase3[0] - 0.1) < 0.01
+    assert abs(weights_phase3[1] - 0.2) < 0.01
+    assert abs(weights_phase3[2] - 0.7) < 0.01
+
+    print(f"✓ Step schedule: Phase1={weights_phase1}, Phase2={weights_phase2}, Phase3={weights_phase3}")
+
+
+# Test 14: ScheduledHybridSelector with standard presets
+def test_scheduled_hybrid_presets(mock_cameras_simple, mock_gaussians):
+    """Test ScheduledHybridSelector with standard preset configurations."""
+    from view_selection import get_standard_config, STANDARD_CONFIGS
+
+    # Test all available presets
+    for preset_name in STANDARD_CONFIGS.keys():
+        config = {'preset': preset_name}
+        selector = build_selector('scheduled_hybrid', config=config, seed=42)
+        selector.initialize(mock_cameras_simple)
+
+        # Compute probabilities at different iterations
+        for iteration in [0, 1000, 10000]:
+            probs = selector.compute_probabilities(mock_gaussians, iteration=iteration)
+            prob_sum = sum(probs.values())
+            assert abs(prob_sum - 1.0) < 1e-6, \
+                f"Preset '{preset_name}' probabilities sum to {prob_sum}, not 1.0"
+
+        print(f"✓ Preset '{preset_name}' working correctly")
+
+
+# Test 15: ScheduledHybridSelector forwards update_loss
+def test_scheduled_hybrid_forwards_updates(mock_cameras_simple, mock_gaussians):
+    """Test that ScheduledHybridSelector forwards updates to sub-selectors."""
+    config = {
+        'selectors': ['random', 'loss_based'],
+        'weights_start': [0.5, 0.5],
+        'weights_end': [0.5, 0.5],
+        'schedule_type': 'linear',
+        'max_iterations': 1000,
+    }
+
+    selector = build_selector('scheduled_hybrid', config=config, seed=42)
+    selector.initialize(mock_cameras_simple)
+
+    # Make some selections and update losses
+    for i in range(10):
+        cam = selector.select_view(mock_gaussians, iteration=i)
+        loss = 0.5 + 0.1 * i  # Increasing loss
+        selector.update_loss(cam, loss)
+
+    # Find the loss_based sub-selector and check it received updates
+    loss_selector = None
+    for sub in selector.sub_selectors:
+        if hasattr(sub, 'ema_losses'):
+            loss_selector = sub
+            break
+
+    assert loss_selector is not None, "Should have a loss-based sub-selector"
+    assert sum(loss_selector.loss_sample_counts.values()) == 10, \
+        "Loss updates should have been forwarded"
+
+    print(f"✓ ScheduledHybridSelector forwards updates correctly")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
