@@ -70,8 +70,24 @@ pytest --cov=view_selection --cov-report=html
 - torch
 - scipy
 - scikit-learn
+- pandas
+- matplotlib
 
 Install test dependencies:
 ```bash
-pip install pytest pytest-cov
+pip install pytest pytest-cov pandas matplotlib
 ```
+
+## Analysis Tools
+
+The `view_selection/analysis.py` module provides offline analysis of selection logs:
+
+```bash
+# Analyze a single experiment
+python examples/analyze_selection_logs.py output/garden_loss_based/logs
+
+# Compare multiple strategies
+python examples/compare_selectors.py output/
+```
+
+See `view_selection/README_ANALYSIS.md` for detailed documentation.
