@@ -161,9 +161,16 @@ class LossBasedSelector(ViewSelector):
 
             losses = np.array(losses)
 
+            # Normalize losses to [0, 1] range for more stable softmax
+            # This prevents scale issues when comparing across different scenes
+            if losses.max() > losses.min():
+                losses_normalized = (losses - losses.min()) / (losses.max() - losses.min())
+            else:
+                losses_normalized = losses
+
             # Apply softmax with temperature to get probabilities
             # Higher temperature -> more uniform, lower -> more peaked
-            probs = softmax(losses / self.temperature)
+            probs = softmax(losses_normalized / self.temperature)
 
             probabilities = {uid: float(prob) for uid, prob in zip(uids, probs)}
 
