@@ -171,15 +171,13 @@ class ScheduledHybridSelector(ViewSelector):
             self.sub_selectors.append(selector)
 
         if self.verbose:
-            print(f"[ScheduledHybridSelector] Configuration:")
-            print(f"  Selectors: {self.selector_names}")
-            print(f"  Schedule type: {self.schedule_type}")
+            self.logger.debug(f"Configuration: selectors={self.selector_names}, "
+                            f"schedule={self.schedule_type}, temp={self.temperature}")
             if self.schedule_type in ['linear', 'cosine']:
-                print(f"  Weights: {self.weights_start} → {self.weights_end}")
-                print(f"  Max iterations: {self.max_iterations}")
+                self.logger.debug(f"Weights: {self.weights_start} → {self.weights_end}, "
+                                 f"max_iter={self.max_iterations}")
             elif self.schedule_type == 'step':
-                print(f"  Milestones: {len(self.milestones)} phases")
-            print(f"  Temperature: {self.temperature}")
+                self.logger.debug(f"Milestones: {len(self.milestones)} phases")
 
     def initialize(self, all_cameras: List) -> None:
         """
@@ -196,8 +194,7 @@ class ScheduledHybridSelector(ViewSelector):
 
         self.initialized = True
 
-        if self.verbose:
-            print(f"[ScheduledHybridSelector] Initialized {len(self.sub_selectors)} sub-selectors")
+        self.logger.info(f"Initialized {len(self.sub_selectors)} sub-selectors: {self.selector_names}")
 
     def _get_current_weights(self, iteration: int) -> List[float]:
         """
@@ -280,9 +277,8 @@ class ScheduledHybridSelector(ViewSelector):
 
         # Log current weights periodically
         if self.verbose and iteration % 1000 == 0 and iteration > 0:
-            print(f"\n[ScheduledHybridSelector] Iteration {iteration}:")
-            print(f"  Current weights: {[f'{w:.3f}' for w in weights]}")
-            print(f"  Selectors: {self.selector_names}")
+            self.logger.debug(f"Iter {iteration}: weights={[f'{w:.3f}' for w in weights]} "
+                            f"selectors={self.selector_names}")
 
         return combined_scores
 
@@ -360,21 +356,19 @@ class ScheduledHybridSelector(ViewSelector):
         # Get hybrid statistics
         hybrid_stats = self.get_hybrid_statistics(iteration)
 
-        print(f"\n[ScheduledHybridSelector] Statistics at iteration {iteration}:")
-        print(f"  Schedule: {self.schedule_type}")
-        print(f"  Selectors: {self.selector_names}")
-        print(f"  Current weights:")
-        for name, weight in hybrid_stats['current_weights'].items():
-            print(f"    {name}: {weight:.3f}")
+        self.logger.info(f"Statistics at iteration {iteration}:")
+        self.logger.info(f"  Schedule: {self.schedule_type}, selectors: {self.selector_names}")
+        
+        weight_str = ', '.join(f"{name}={w:.3f}" for name, w in hybrid_stats['current_weights'].items())
+        self.logger.info(f"  Weights: {weight_str}")
 
         if self.schedule_type in ['linear', 'cosine']:
-            print(f"  Progress: {hybrid_stats['progress']:.1%}")
+            self.logger.info(f"  Progress: {hybrid_stats['progress']:.1%}")
         elif self.schedule_type == 'step':
-            print(f"  Phase: {hybrid_stats['current_phase'] + 1}/{hybrid_stats['total_phases']}")
+            self.logger.info(f"  Phase: {hybrid_stats['current_phase'] + 1}/{hybrid_stats['total_phases']}")
 
-        print(f"  Selection stats:")
-        print(f"    Total selections: {selection_stats.get('total_selections', 0)}")
-        print(f"    Unique cameras: {selection_stats.get('unique_cameras', 0)}")
+        self.logger.info(f"  Selections: {selection_stats.get('total_selections', 0)}, "
+                        f"unique cameras: {selection_stats.get('unique_cameras', 0)}")
 
 
 def get_standard_config(preset_name: str) -> dict:

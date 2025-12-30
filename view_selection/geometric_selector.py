@@ -52,11 +52,10 @@ class GeometricDiversitySelector(ViewSelector):
             all_cameras: List of all available Camera objects
         """
         super().initialize(all_cameras)
-        if self.verbose:
-            print(f"[GeometricDiversitySelector] Initializing with {len(all_cameras)} cameras")
-            print(f"[GeometricDiversitySelector] Temperature: {self.temperature}")
-            print(f"[GeometricDiversitySelector] Distance weight: {self.distance_weight}")
-            print(f"[GeometricDiversitySelector] Diversity weight: {self.diversity_weight}")
+        self.logger.info(f"Initializing with {len(all_cameras)} cameras")
+        self.logger.debug(f"Temperature: {self.temperature}")
+        self.logger.debug(f"Distance weight: {self.distance_weight}")
+        self.logger.debug(f"Diversity weight: {self.diversity_weight}")
 
         # Extract camera positions
         positions = []
@@ -113,10 +112,8 @@ class GeometricDiversitySelector(ViewSelector):
 
         self.initialized = True
 
-        if self.verbose:
-            print(f"[GeometricDiversitySelector] Probability range: "
-                  f"{min(probabilities):.4f} - {max(probabilities):.4f}")
-            print(f"[GeometricDiversitySelector] Probability std: {np.std(probabilities):.4f}")
+        self.logger.info(f"Probability range: {min(probabilities):.4f} - {max(probabilities):.4f}")
+        self.logger.debug(f"Probability std: {np.std(probabilities):.4f}")
 
     def compute_probabilities(self, gaussians, iteration: int) -> Dict[int, float]:
         """

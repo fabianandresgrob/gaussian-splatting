@@ -15,7 +15,7 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 from PIL import Image
 import numpy as np
 import json
-from view_selection import build_selector
+from view_selection import build_selector, configure_logging
 
 # Optional logging backends
 TENSORBOARD_FOUND = False
@@ -145,7 +145,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     except:
         config = {}
 
-    selector = build_selector(strategy, config=config, seed=seed)
+    # Configure logging for view selection module
+    configure_logging(log_dir=dataset.model_path, level="INFO", use_tqdm_handler=True)
+    
+    selector = build_selector(strategy, config=config, log_dir=dataset.model_path, seed=seed)
     selector.initialize(scene.getTrainCameras())
 
     ema_loss_for_log = 0.0

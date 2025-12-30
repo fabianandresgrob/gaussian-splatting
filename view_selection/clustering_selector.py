@@ -70,15 +70,14 @@ class ClusteringSelector(ViewSelector):
             all_cameras: List of all available Camera objects
         """
         super().initialize(all_cameras)
-        if self.verbose:
-            print(f"[ClusteringSelector] Initializing with {len(all_cameras)} cameras")
-            print(f"[ClusteringSelector] Clustering method: {self.clustering_method}")
-            if self.clustering_method == 'kmeans':
-                print(f"[ClusteringSelector] Number of clusters: {self.n_clusters}")
-            else:
-                print(f"[ClusteringSelector] DBSCAN eps: {self.eps}, min_samples: {self.min_samples}")
-            print(f"[ClusteringSelector] Use orientation: {self.use_orientation}")
-            print(f"[ClusteringSelector] Update frequency: {self.update_frequency} iterations")
+        self.logger.info(f"Initializing with {len(all_cameras)} cameras")
+        self.logger.info(f"Clustering method: {self.clustering_method}")
+        if self.clustering_method == 'kmeans':
+            self.logger.debug(f"Number of clusters: {self.n_clusters}")
+        else:
+            self.logger.debug(f"DBSCAN eps: {self.eps}, min_samples: {self.min_samples}")
+        self.logger.debug(f"Use orientation: {self.use_orientation}")
+        self.logger.debug(f"Update frequency: {self.update_frequency} iterations")
 
         # Extract features for clustering
         features = []
@@ -108,7 +107,7 @@ class ClusteringSelector(ViewSelector):
             # Adjust n_clusters if there are fewer cameras
             actual_n_clusters = min(self.n_clusters, len(all_cameras))
             if actual_n_clusters < self.n_clusters:
-                print(f"[ClusteringSelector] Warning: Only {len(all_cameras)} cameras available, "
+                self.logger.warning(f"Only {len(all_cameras)} cameras available, "
                       f"reducing clusters to {actual_n_clusters}")
                 self.n_clusters = actual_n_clusters
 
@@ -137,9 +136,9 @@ class ClusteringSelector(ViewSelector):
             if self.verbose:
                 n_noise = np.sum(self.clusterer.labels_ == -1)
                 n_regular_clusters = len(np.unique(self.clusterer.labels_[self.clusterer.labels_ != -1]))
-                print(f"[ClusteringSelector] DBSCAN found {n_regular_clusters} clusters")
+                self.logger.debug(f"DBSCAN found {n_regular_clusters} clusters")
                 if n_noise > 0:
-                    print(f"[ClusteringSelector] {n_noise} noise points assigned to outlier cluster {outlier_cluster_id}")
+                    self.logger.debug(f"{n_noise} noise points assigned to outlier cluster {outlier_cluster_id}")
 
         else:
             raise ValueError(f"Unknown clustering method: {self.clustering_method}. "
@@ -158,10 +157,10 @@ class ClusteringSelector(ViewSelector):
         self.cluster_selection_counts = {int(cluster_id): 0 for cluster_id in unique_clusters}
 
         if self.verbose:
-            print(f"[ClusteringSelector] Final number of clusters: {self.n_clusters}")
-            print(f"[ClusteringSelector] Cluster sizes: {self.cluster_sizes}")
+            self.logger.debug(f"Final number of clusters: {self.n_clusters}")
+            self.logger.debug(f"Cluster sizes: {self.cluster_sizes}")
             avg_size = np.mean(list(self.cluster_sizes.values()))
-            print(f"[ClusteringSelector] Average cluster size: {avg_size:.2f}")
+            self.logger.debug(f"Average cluster size: {avg_size:.2f}")
 
         # Compute initial probabilities
         self.current_probabilities = self._compute_probabilities_internal()
@@ -221,8 +220,8 @@ class ClusteringSelector(ViewSelector):
             self.last_update_iteration = iteration
 
             if self.verbose and iteration > 0:
-                print(f"\n[ClusteringSelector] Updated probabilities at iteration {iteration}")
-                print(f"[ClusteringSelector] Cluster selection counts: {self.cluster_selection_counts}")
+                self.logger.debug(f"Updated probabilities at iteration {iteration}")
+                self.logger.debug(f"Cluster selection counts: {self.cluster_selection_counts}")
 
         return self.current_probabilities
 

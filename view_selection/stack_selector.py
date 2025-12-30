@@ -52,8 +52,7 @@ class StackBasedSelector(ViewSelector):
 
         self.initialized = True
 
-        if self.verbose:
-            print(f"[StackBasedSelector] Initialized with {len(all_cameras)} cameras; seed={self.seed}")
+        self.logger.info(f"Initialized with {len(all_cameras)} cameras, seed={self.seed}")
 
     def _refill_queue(self, uids: List[int]) -> None:
         """Shuffle and refill the internal queue."""

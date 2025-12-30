@@ -58,12 +58,8 @@ class GaussianAwareSelector(ViewSelector):
         # Pending coverage updates (for lazy batch processing)
         self.pending_coverage_cameras = []  # List of cameras waiting for coverage update
 
-        if self.verbose:
-            print(f"[GaussianAwareSelector] Configuration:")
-            print(f"  Mode: {self.mode}")
-            print(f"  Update frequency: {self.update_frequency} iterations")
-            print(f"  Temperature: {self.temperature}")
-            print(f"  Frustum margin: {self.frustum_margin}")
+        self.logger.debug(f"Configuration: mode={self.mode}, update_frequency={self.update_frequency}, "
+                         f"temperature={self.temperature}, frustum_margin={self.frustum_margin}")
 
     def initialize(self, all_cameras: List) -> None:
         """
@@ -79,8 +75,7 @@ class GaussianAwareSelector(ViewSelector):
 
         self.initialized = True
 
-        if self.verbose:
-            print(f"[GaussianAwareSelector] Initialized with {len(all_cameras)} cameras")
+        self.logger.info(f"Initialized with {len(all_cameras)} cameras")
 
     def _check_frustum_batch(self, gaussian_positions: torch.Tensor, camera) -> torch.Tensor:
         """
@@ -172,8 +167,7 @@ class GaussianAwareSelector(ViewSelector):
 
         # EDGE CASE: Reset coverage counts if Gaussian count changed (densification/pruning)
         if self.coverage_counts is not None and self.coverage_counts.shape[0] != n_gaussians:
-            if self.verbose:
-                print(f"[GaussianAwareSelector] Gaussian count changed: "
+            self.logger.warning(f"Gaussian count changed: "
                       f"{self.coverage_counts.shape[0]} -> {n_gaussians}. Resetting coverage counts.")
             self.coverage_counts = torch.zeros(n_gaussians, device=gaussian_positions.device)
 
@@ -185,10 +179,8 @@ class GaussianAwareSelector(ViewSelector):
 
         if self.verbose:
             counts = list(self.camera_gaussian_counts.values())
-            print(f"[GaussianAwareSelector] Gaussian visibility computed:")
-            print(f"  Total Gaussians: {n_gaussians}")
-            print(f"  Visible range: [{min(counts)}, {max(counts)}]")
-            print(f"  Mean visible: {np.mean(counts):.1f}")
+            self.logger.debug(f"Gaussian visibility: n={n_gaussians}, "
+                            f"range=[{min(counts)}, {max(counts)}], mean={np.mean(counts):.1f}")
 
     def _compute_probabilities_internal(self, gaussians) -> Dict[int, float]:
         """
@@ -304,7 +296,7 @@ class GaussianAwareSelector(ViewSelector):
             self.pending_coverage_cameras.append(cam)
 
             if self.verbose and len(self.pending_coverage_cameras) % 100 == 0:
-                print(f"[GaussianAwareSelector] {len(self.pending_coverage_cameras)} cameras pending coverage update")
+                self.logger.debug(f"{len(self.pending_coverage_cameras)} cameras pending coverage update")
 
     def update_coverage_counts(self, gaussians, camera=None) -> None:
         """
@@ -340,7 +332,7 @@ class GaussianAwareSelector(ViewSelector):
             self.pending_coverage_cameras = []
 
         if self.verbose and total_updated > 0:
-            print(f"[GaussianAwareSelector] Updated coverage for {total_updated} Gaussian views "
+            self.logger.debug(f"Updated coverage for {total_updated} Gaussian views "
                   f"({len(cameras_to_process)} cameras)")
 
     def get_gaussian_statistics(self) -> Dict:
@@ -388,20 +380,17 @@ class GaussianAwareSelector(ViewSelector):
         # Get Gaussian statistics
         gaussian_stats = self.get_gaussian_statistics()
 
-        print(f"\n[GaussianAwareSelector] Statistics at iteration {iteration}:")
-        print(f"  Mode: {self.mode}")
-        print(f"  Selection stats:")
-        print(f"    Total selections: {selection_stats.get('total_selections', 0)}")
-        print(f"    Unique cameras: {selection_stats.get('unique_cameras', 0)}")
+        self.logger.info(f"Statistics at iteration {iteration}:")
+        self.logger.info(f"  Mode: {self.mode}")
+        self.logger.info(f"  Selections: {selection_stats.get('total_selections', 0)}, "
+                        f"unique cameras: {selection_stats.get('unique_cameras', 0)}")
 
         if 'visibility_stats' in gaussian_stats:
             vstats = gaussian_stats['visibility_stats']
-            print(f"  Gaussian visibility:")
-            print(f"    Range: [{vstats['min_visible']}, {vstats['max_visible']}]")
-            print(f"    Mean ± std: {vstats['mean_visible']:.1f} ± {vstats['std_visible']:.1f}")
+            self.logger.info(f"  Visibility: range=[{vstats['min_visible']}, {vstats['max_visible']}], "
+                            f"mean={vstats['mean_visible']:.1f} ± {vstats['std_visible']:.1f}")
 
         if 'coverage_stats' in gaussian_stats:
             cstats = gaussian_stats['coverage_stats']
-            print(f"  Gaussian coverage:")
-            print(f"    Range: [{cstats['min_coverage']:.1f}, {cstats['max_coverage']:.1f}]")
-            print(f"    Mean ± std: {cstats['mean_coverage']:.1f} ± {cstats['std_coverage']:.1f}")
+            self.logger.info(f"  Coverage: range=[{cstats['min_coverage']:.1f}, {cstats['max_coverage']:.1f}], "
+                            f"mean={cstats['mean_coverage']:.1f} ± {cstats['std_coverage']:.1f}")

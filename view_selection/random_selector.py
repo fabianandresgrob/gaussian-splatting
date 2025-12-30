@@ -42,9 +42,9 @@ class UniformRandomSelector(ViewSelector):
         self.num_cameras = len(all_cameras)
         self.initialized = True
 
+        self.logger.info(f"Initialized with {self.num_cameras} cameras")
         if self.verbose:
-            print(f"[UniformRandomSelector] Initialized with {self.num_cameras} cameras")
-            print(f"[UniformRandomSelector] Each camera has probability {1.0/self.num_cameras:.4f}")
+            self.logger.debug(f"Each camera has probability {1.0/self.num_cameras:.4f}")
 
     def compute_probabilities(self, gaussians, iteration: int) -> Dict[int, float]:
         """

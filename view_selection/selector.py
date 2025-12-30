@@ -12,6 +12,8 @@ from typing import Dict, List, Optional
 import json
 import os
 
+from .logging_utils import get_logger, log_config
+
 
 class ViewSelector(ABC):
     """
@@ -28,13 +30,17 @@ class ViewSelector(ABC):
         Args:
             config: Dictionary containing strategy-specific configuration
             log_dir: Directory to save selection logs (if None, logging is disabled)
-            verbose: If True, print detailed selection information
+            verbose: If True, enable verbose logging output
             seed: Random seed for reproducibility
         """
         self.config = config or {}
         self.log_dir = log_dir
         self.verbose = verbose
         self.seed = seed
+        
+        # Initialize logger for this selector
+        self._logger = get_logger(self.__class__.__name__)
+        
         # Create seeded RNG for reproducibility
         self.rng = np.random.RandomState(seed) if seed is not None else np.random
         self.selection_history = []  # List of (iteration, cam_uid, score) tuples
@@ -48,6 +54,11 @@ class ViewSelector(ABC):
             self.log_file = os.path.join(self.log_dir, "selection_history.jsonl")
         else:
             self.log_file = None
+
+    @property
+    def logger(self):
+        """Get the logger instance for this selector."""
+        return self._logger
 
     @abstractmethod
     def initialize(self, all_cameras: List) -> None:
@@ -152,10 +163,12 @@ class ViewSelector(ABC):
                 json.dump(self.selection_history[-1], f)
                 f.write('\n')
 
-        # Verbose output
+        # Debug-level logging for individual selections (verbose mode logs more frequently)
         if self.verbose and iteration % 100 == 0:
-            print(f"[Iter {iteration}] Selected camera {cam.uid} ({cam.image_name}) "
-                  f"with probability {score:.4f} (selected {self.selection_counts[cam.uid]} times)")
+            self.logger.debug(
+                f"Iter {iteration}: Selected camera {cam.uid} ({cam.image_name}) "
+                f"prob={score:.4f} count={self.selection_counts[cam.uid]}"
+            )
 
     def get_selection_statistics(self) -> Dict:
         """
@@ -183,21 +196,30 @@ class ViewSelector(ABC):
         stats = self.get_selection_statistics()
         with open(filepath, 'w') as f:
             json.dump(stats, f, indent=2)
+        self.logger.info(f"Selection statistics saved to {filepath}")
 
     def log_statistics(self, iteration: int) -> None:
         """
-        Print selection statistics to console.
+        Log selection statistics.
 
         Args:
             iteration: Current training iteration
         """
         stats = self.get_selection_statistics()
-        print(f"\n[Iter {iteration}] Selection Statistics:")
-        print(f"  Total selections: {stats['total_selections']}")
-        print(f"  Unique cameras used: {stats['unique_cameras']}")
+        self.logger.info(f"Selection Statistics at iteration {iteration}:")
+        self.logger.info(f"  Total selections: {stats['total_selections']}")
+        self.logger.info(f"  Unique cameras used: {stats['unique_cameras']}")
         if stats['most_selected']:
-            print(f"  Most selected: Camera {stats['most_selected'][0]} "
-                  f"({stats['most_selected'][1]} times)")
+            self.logger.info(
+                f"  Most selected: Camera {stats['most_selected'][0]} "
+                f"({stats['most_selected'][1]} times)"
+            )
         if stats['least_selected']:
-            print(f"  Least selected: Camera {stats['least_selected'][0]} "
-                  f"({stats['least_selected'][1]} times)")
+            self.logger.info(
+                f"  Least selected: Camera {stats['least_selected'][0]} "
+                f"({stats['least_selected'][1]} times)"
+            )
+
+    def log_config(self) -> None:
+        """Log the selector configuration."""
+        log_config(self.logger, self.config, f"{self.__class__.__name__} configuration")

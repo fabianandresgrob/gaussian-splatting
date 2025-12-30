@@ -84,11 +84,9 @@ class DINOSelector(ViewSelector):
         self.recent_selections = []  # List of recently selected camera indices
 
         if self.verbose:
-            print(f"[DINOSelector] Configuration:")
-            print(f"  Embeddings path: {self.embeddings_path}")
-            print(f"  Temperature: {self.temperature}")
-            print(f"  Diversity mode: {self.diversity_mode}")
-            print(f"  Recency window: {self.recency_window}")
+            self.logger.debug(f"Configuration: embeddings_path={self.embeddings_path}, "
+                            f"temperature={self.temperature}, mode={self.diversity_mode}, "
+                            f"recency_window={self.recency_window}")
 
     def initialize(self, all_cameras: List) -> None:
         """
@@ -104,11 +102,10 @@ class DINOSelector(ViewSelector):
             self._load_embeddings()
         else:
             # PLACEHOLDER: Fall back to uniform sampling
-            print("[DINOSelector] WARNING: No embeddings_path provided!")
-            print("[DINOSelector] Falling back to uniform random sampling.")
-            print("[DINOSelector] To use DINO features:")
-            print("  1. Run: python extract_dino_features.py --scene_path <path>")
-            print("  2. Pass: embeddings_path=<output_path> in config")
+            self.logger.warning("No embeddings_path provided! Falling back to uniform sampling.")
+            self.logger.info("To use DINO features: ")
+            self.logger.info("  1. Run: python extract_dino_features.py --scene_path <path>")
+            self.logger.info("  2. Pass: embeddings_path=<output_path> in config")
 
         self.initialized = True
 
@@ -123,7 +120,7 @@ class DINOSelector(ViewSelector):
             )
 
         if self.verbose:
-            print(f"[DINOSelector] Loading embeddings from {self.embeddings_path}")
+            self.logger.debug(f"Loading embeddings from {self.embeddings_path}")
 
         self.embeddings = torch.load(self.embeddings_path, map_location='cpu')
 
@@ -160,10 +157,9 @@ class DINOSelector(ViewSelector):
         self.embedding_matrix = np.stack(embeddings_list)
 
         if self.verbose:
-            print(f"[DINOSelector] Loaded {len(self.embeddings)} embeddings")
-            print(f"[DINOSelector] Embedding shape: {self.embedding_matrix.shape}")
+            self.logger.debug(f"Loaded {len(self.embeddings)} embeddings, shape={self.embedding_matrix.shape}")
             if missing_count > 0:
-                print(f"[DINOSelector] WARNING: {missing_count} cameras missing embeddings")
+                self.logger.warning(f"{missing_count} cameras missing embeddings")
 
     def compute_probabilities(self, gaussians, iteration: int) -> Dict[int, float]:
         """

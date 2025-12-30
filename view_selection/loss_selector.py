@@ -57,10 +57,8 @@ class LossBasedSelector(ViewSelector):
         self.loss_sample_counts = {}  # Dict mapping camera uid to number of loss updates
 
         if self.verbose:
-            print(f"[LossBasedSelector] Configuration:")
-            print(f"  EMA decay: {self.ema_decay}")
-            print(f"  Temperature: {self.temperature}")
-            print(f"  Min samples before bias: {self.min_samples_before_bias}")
+            self.logger.debug(f"Configuration: ema_decay={self.ema_decay}, "
+                            f"temperature={self.temperature}, min_samples={self.min_samples_before_bias}")
 
     def initialize(self, all_cameras: List) -> None:
         """
@@ -78,8 +76,7 @@ class LossBasedSelector(ViewSelector):
 
         self.initialized = True
 
-        if self.verbose:
-            print(f"[LossBasedSelector] Initialized with {len(all_cameras)} cameras")
+        self.logger.info(f"Initialized with {len(all_cameras)} cameras")
 
     def update_loss(self, camera, loss: float) -> None:
         """
@@ -114,7 +111,7 @@ class LossBasedSelector(ViewSelector):
             self.loss_sample_counts[uid] += 1
 
         if self.verbose and self.loss_sample_counts[uid] % 100 == 0:
-            print(f"[LossBasedSelector] Camera {uid} ({camera.image_name}): "
+            self.logger.debug(f"Camera {uid} ({camera.image_name}): "
                   f"EMA loss = {self.ema_losses[uid]:.6f} "
                   f"(samples: {self.loss_sample_counts[uid]})")
 
@@ -146,7 +143,7 @@ class LossBasedSelector(ViewSelector):
             probabilities = {cam.uid: uniform_prob for cam in self.all_cameras}
 
             if self.verbose and iteration % 1000 == 0:
-                print(f"[LossBasedSelector] Iter {iteration}: Using uniform sampling "
+                self.logger.debug(f"Iter {iteration}: Uniform sampling "
                       f"(min samples: {min_samples}/{self.min_samples_before_bias})")
         else:
             # Loss-based sampling
@@ -177,11 +174,9 @@ class LossBasedSelector(ViewSelector):
             if self.verbose and iteration % 1000 == 0:
                 max_loss_idx = np.argmax(losses)
                 min_loss_idx = np.argmin(losses)
-                print(f"[LossBasedSelector] Iter {iteration}: Loss-based sampling")
-                print(f"  Loss range: [{losses[min_loss_idx]:.6f}, {losses[max_loss_idx]:.6f}]")
-                print(f"  Probability range: [{probs.min():.4f}, {probs.max():.4f}]")
-                print(f"  Highest loss camera: {uids[max_loss_idx]} "
-                      f"(prob: {probs[max_loss_idx]:.4f})")
+                self.logger.debug(f"Iter {iteration}: Loss-based sampling, "
+                      f"loss=[{losses[min_loss_idx]:.6f}, {losses[max_loss_idx]:.6f}], "
+                      f"prob=[{probs.min():.4f}, {probs.max():.4f}]")
 
         return probabilities
 
@@ -224,17 +219,12 @@ class LossBasedSelector(ViewSelector):
         # Get loss statistics
         loss_stats = self.get_loss_statistics()
 
-        print(f"\n[LossBasedSelector] Statistics at iteration {iteration}:")
-        print(f"  Selection stats:")
-        print(f"    Total selections: {selection_stats.get('total_selections', 0)}")
-        print(f"    Unique cameras: {selection_stats.get('unique_cameras', 0)}")
+        self.logger.info(f"Statistics at iteration {iteration}:")
+        self.logger.info(f"  Selections: {selection_stats.get('total_selections', 0)}, "
+                        f"unique cameras: {selection_stats.get('unique_cameras', 0)}")
 
         if loss_stats:
-            print(f"  Loss stats:")
-            print(f"    Mean EMA loss: {loss_stats['mean_ema_loss']:.6f}")
-            print(f"    Loss std dev: {loss_stats['std_ema_loss']:.6f}")
-            print(f"    Loss range: [{loss_stats['min_ema_loss']:.6f}, "
-                  f"{loss_stats['max_ema_loss']:.6f}]")
-            print(f"    Sample count range: [{loss_stats['min_sample_count']}, "
-                  f"{loss_stats['max_sample_count']}]")
-            print(f"    Total loss updates: {loss_stats['total_loss_updates']}")
+            self.logger.info(f"  Loss: mean={loss_stats['mean_ema_loss']:.6f} ± {loss_stats['std_ema_loss']:.6f}, "
+                  f"range=[{loss_stats['min_ema_loss']:.6f}, {loss_stats['max_ema_loss']:.6f}]")
+            self.logger.info(f"  Samples: count=[{loss_stats['min_sample_count']}, {loss_stats['max_sample_count']}], "
+                  f"total={loss_stats['total_loss_updates']}")

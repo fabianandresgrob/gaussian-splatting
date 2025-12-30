@@ -31,6 +31,7 @@ from .gaussian_aware_selector import GaussianAwareSelector
 from .scheduled_hybrid_selector import ScheduledHybridSelector, get_standard_config, STANDARD_CONFIGS
 from .dino_selector import DINOSelector
 from .vggt_selector import VGGTSelector
+from .logging_utils import configure_logging, get_logger
 
 # Legacy aliases for backward compatibility
 RandomSelector = UniformRandomSelector
@@ -145,4 +146,7 @@ __all__ = [
     'get_standard_config',
     'STANDARD_CONFIGS',
     'SELECTOR_REGISTRY',
+    # Logging
+    'configure_logging',
+    'get_logger',
 ]
