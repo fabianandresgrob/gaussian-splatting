@@ -25,7 +25,7 @@ STANDARD_CONFIGS = {
 
     'geometric_to_gaussian': {
         'description': 'Start with geometric heuristics, transition to Gaussian-aware',
-        'selectors': ['fixed_prob', 'gaussian_aware'],
+        'selectors': ['geometric', 'gaussian_aware'],
         'weights_start': [0.9, 0.1],
         'weights_end': [0.3, 0.7],
         'schedule_type': 'cosine',
@@ -39,7 +39,7 @@ STANDARD_CONFIGS = {
 
     'three_phase_training': {
         'description': 'Three-phase: diversity → balance → loss-focused',
-        'selectors': ['clustering', 'fixed_prob', 'loss_based'],
+        'selectors': ['clustering', 'geometric', 'loss_based'],
         'schedule_type': 'step',
         'milestones': [
             [0,     [0.6, 0.3, 0.1]],   # Phase 1: Diversity (clustering)

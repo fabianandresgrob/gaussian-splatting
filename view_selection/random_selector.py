@@ -1,7 +1,8 @@
 """
-Random view selection strategy (baseline).
+True Random (uniform) view selection strategy (baseline).
 
-This replicates the original behavior where cameras are selected uniformly at random.
+This selects cameras uniformly at random WITH replacement.
+Any view can repeat and some views may be skipped.
 """
 
 import numpy as np
@@ -9,9 +10,12 @@ from typing import Dict, List
 from .selector import ViewSelector
 
 
-class RandomSelector(ViewSelector):
+class UniformRandomSelector(ViewSelector):
     """
-    Baseline selector that assigns uniform probability to all cameras.
+    True random baseline selector that assigns uniform probability to all cameras.
+    
+    Samples uniformly at random with replacement - probabilistic coverage.
+    This is the natural baseline for probability-based selection methods.
     """
 
     def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None):
@@ -39,8 +43,8 @@ class RandomSelector(ViewSelector):
         self.initialized = True
 
         if self.verbose:
-            print(f"[RandomSelector] Initialized with {self.num_cameras} cameras")
-            print(f"[RandomSelector] Each camera has probability {1.0/self.num_cameras:.4f}")
+            print(f"[UniformRandomSelector] Initialized with {self.num_cameras} cameras")
+            print(f"[UniformRandomSelector] Each camera has probability {1.0/self.num_cameras:.4f}")
 
     def compute_probabilities(self, gaussians, iteration: int) -> Dict[int, float]:
         """

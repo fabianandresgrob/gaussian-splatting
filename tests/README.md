@@ -42,19 +42,17 @@ pytest --cov=view_selection --cov-report=html
 2. **test_probability_sum**: Ensures probabilities always sum to 1.0
 3. **test_reproducibility**: Confirms same seed produces identical selection sequences
 4. **test_all_cameras_nonzero_prob**: Checks that all cameras have non-zero probability
-5. **test_epoch_selector_reset**: Validates EpochBasedSelector resets after N selections
-6. **test_clustering_all_assigned**: Ensures all cameras are assigned to clusters (K-Means & DBSCAN)
-7. **test_loss_based_selector_updates**: Verifies LossBasedSelector correctly updates EMA losses
-8. **test_dbscan_noise_handling**: Tests DBSCAN noise point handling (outlier cluster)
-9. **test_selection_statistics**: Validates selection tracking and statistics
+5. **test_clustering_all_assigned**: Ensures all cameras are assigned to clusters (K-Means & DBSCAN)
+6. **test_loss_based_selector_updates**: Verifies LossBasedSelector correctly updates EMA losses
+7. **test_dbscan_noise_handling**: Tests DBSCAN noise point handling (outlier cluster)
+8. **test_selection_statistics**: Validates selection tracking and statistics
 
 ### Tested Selectors
 
-- RandomSelector
-- FixedProbabilitySelector
-- EpochBasedSelector
+- UniformRandomSelector (True Random baseline)
+- StackBasedSelector (Stack-based default baseline)
+- GeometricDiversitySelector (Geometric diversity)
 - ClusteringSelector (K-Means and DBSCAN)
-- WithoutReplacementSelector
 - LossBasedSelector
 
 ## Fixtures

@@ -1,8 +1,8 @@
 """
-Fixed probability view selection based on pose heuristics.
+Geometric diversity view selection based on pose heuristics.
 
 This selector computes probabilities once at initialization based on camera pose
-properties and keeps them fixed throughout training.
+properties (geometric diversity) and keeps them fixed throughout training.
 """
 
 import numpy as np
@@ -12,15 +12,16 @@ from scipy.special import softmax
 from .selector import ViewSelector
 
 
-class FixedProbabilitySelector(ViewSelector):
+class GeometricDiversitySelector(ViewSelector):
     """
-    Selector that computes fixed probabilities based on camera pose heuristics.
+    Selector that computes fixed probabilities based on geometric diversity heuristics.
 
-    Heuristics include:
-    - Distance from scene center (prioritize diverse viewpoints)
-    - Spatial diversity (avoid over-sampling clustered cameras)
+    Uses camera poses to identify "unique" viewpoints through:
+    - Distance from camera centroid (cameras far from center = high score)
+    - Average distance to other cameras (spatial diversity)
 
-    Probabilities are computed once and remain fixed during training.
+    Probabilities are computed once at initialization and remain fixed during training.
+    This is very cheap computationally.
     """
 
     def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None):
@@ -52,10 +53,10 @@ class FixedProbabilitySelector(ViewSelector):
         """
         super().initialize(all_cameras)
         if self.verbose:
-            print(f"[FixedProbabilitySelector] Initializing with {len(all_cameras)} cameras")
-            print(f"[FixedProbabilitySelector] Temperature: {self.temperature}")
-            print(f"[FixedProbabilitySelector] Distance weight: {self.distance_weight}")
-            print(f"[FixedProbabilitySelector] Diversity weight: {self.diversity_weight}")
+            print(f"[GeometricDiversitySelector] Initializing with {len(all_cameras)} cameras")
+            print(f"[GeometricDiversitySelector] Temperature: {self.temperature}")
+            print(f"[GeometricDiversitySelector] Distance weight: {self.distance_weight}")
+            print(f"[GeometricDiversitySelector] Diversity weight: {self.diversity_weight}")
 
         # Extract camera positions
         positions = []
@@ -113,9 +114,9 @@ class FixedProbabilitySelector(ViewSelector):
         self.initialized = True
 
         if self.verbose:
-            print(f"[FixedProbabilitySelector] Probability range: "
+            print(f"[GeometricDiversitySelector] Probability range: "
                   f"{min(probabilities):.4f} - {max(probabilities):.4f}")
-            print(f"[FixedProbabilitySelector] Probability std: {np.std(probabilities):.4f}")
+            print(f"[GeometricDiversitySelector] Probability std: {np.std(probabilities):.4f}")
 
     def compute_probabilities(self, gaussians, iteration: int) -> Dict[int, float]:
         """

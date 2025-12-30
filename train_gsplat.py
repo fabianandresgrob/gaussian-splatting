@@ -378,9 +378,11 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default=None)
-    parser.add_argument("--view_selection_strategy", type=str, default="random",
-                        choices=["random", "fixed_prob", "epoch_based", "clustering", "no_replace",
-                                 "loss_based", "gaussian_aware", "scheduled_hybrid", "dino"])
+    parser.add_argument("--view_selection_strategy", type=str, default="stack", 
+                        choices=["stack", "uniform_random", "geometric", "clustering", "loss_based", 
+                                 "gaussian_aware", "scheduled_hybrid", "dino",
+                                 # Legacy aliases
+                                 "random", "fixed_prob", "no_replace"])
     parser.add_argument("--view_selection_config", type=str, default="{}")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--logger", type=str, default="tensorboard",

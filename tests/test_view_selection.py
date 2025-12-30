@@ -208,36 +208,7 @@ def test_all_cameras_nonzero_prob(selector_name, mock_cameras_simple, mock_gauss
     )
 
 
-# Test 5: EpochBasedSelector resets after N selections
-def test_epoch_selector_reset(mock_cameras_simple, mock_gaussians):
-    """Test that EpochBasedSelector resets selection counts after each epoch."""
-    selector = build_selector('epoch_based', seed=42)
-    selector.initialize(mock_cameras_simple)
-
-    n_cameras = len(mock_cameras_simple)
-
-    # Track epoch numbers during selections
-    epoch_numbers = []
-
-    # Make selections for 2.5 epochs
-    n_selections = int(2.5 * n_cameras)
-    for i in range(n_selections):
-        cam = selector.select_view(mock_gaussians, iteration=i)
-        epoch_numbers.append(selector.epoch_number)
-
-    # Check that epoch number increased
-    assert max(epoch_numbers) >= 2, "Epoch should have incremented at least twice"
-
-    # Check that epoch resets happened at correct intervals
-    # After N selections, we should be in epoch 1
-    # After 2N selections, we should be in epoch 2
-    assert epoch_numbers[n_cameras] >= 1, f"Should be in epoch 1+ after {n_cameras} selections"
-    assert epoch_numbers[2 * n_cameras] >= 2, f"Should be in epoch 2+ after {2*n_cameras} selections"
-
-    print(f"✓ EpochBasedSelector reset correctly. Epochs seen: {set(epoch_numbers)}")
-
-
-# Test 6: ClusteringSelector assigns all cameras to clusters
+# Test 5: ClusteringSelector assigns all cameras to clusters
 @pytest.mark.parametrize("clustering_method", ['kmeans', 'dbscan'])
 def test_clustering_all_assigned(clustering_method, mock_cameras_diverse, mock_gaussians):
     """Test that ClusteringSelector assigns all cameras to a cluster."""
@@ -278,7 +249,7 @@ def test_clustering_all_assigned(clustering_method, mock_cameras_diverse, mock_g
           f"sizes: {list(stats['cluster_sizes'].values())}")
 
 
-# Test 7: LossBasedSelector updates loss correctly
+# Test 6: LossBasedSelector updates loss correctly
 def test_loss_based_selector_updates(mock_cameras_simple, mock_gaussians):
     """Test that LossBasedSelector correctly updates EMA losses."""
     config = {
@@ -313,7 +284,7 @@ def test_loss_based_selector_updates(mock_cameras_simple, mock_gaussians):
     print(f"  EMA losses: {dict(list(selector.ema_losses.items())[:3])}")
 
 
-# Test 8: Clustering with DBSCAN handles noise points
+# Test 7: Clustering with DBSCAN handles noise points
 def test_dbscan_noise_handling(mock_cameras_diverse, mock_gaussians):
     """Test that DBSCAN correctly handles noise points (outliers)."""
     # Use strict DBSCAN parameters to force some noise points
@@ -338,7 +309,7 @@ def test_dbscan_noise_handling(mock_cameras_diverse, mock_gaussians):
     print(f"  Cluster sizes: {selector.cluster_sizes}")
 
 
-# Test 9: Selection statistics tracking
+# Test 8: Selection statistics tracking
 def test_selection_statistics(mock_cameras_simple, mock_gaussians):
     """Test that selectors correctly track selection statistics."""
     selector = build_selector('random', seed=42)
@@ -366,7 +337,7 @@ def test_selection_statistics(mock_cameras_simple, mock_gaussians):
     print(f"  Most selected: camera {stats['most_selected'][0]} ({stats['most_selected'][1]} times)")
 
 
-# Test 10: GaussianAwareSelector with mock Gaussians
+# Test 9: GaussianAwareSelector with mock Gaussians
 def test_gaussian_aware_selector(mock_cameras_simple, mock_gaussians):
     """Test that GaussianAwareSelector works with mock Gaussians."""
     # Create mock Gaussians with positions
@@ -422,7 +393,7 @@ def test_gaussian_aware_selector(mock_cameras_simple, mock_gaussians):
     print(f"✓ GaussianAwareSelector (coverage_gap) working correctly")
 
 
-# Test 11: GaussianAwareSelector coverage tracking
+# Test 10: GaussianAwareSelector coverage tracking
 def test_gaussian_aware_coverage_tracking(mock_cameras_simple, mock_gaussians):
     """Test that coverage tracking updates correctly."""
     n_gaussians = 100
@@ -455,11 +426,11 @@ def test_gaussian_aware_coverage_tracking(mock_cameras_simple, mock_gaussians):
     print(f"  Total coverage after 10 selections: {selector.coverage_counts.sum().item():.0f}")
 
 
-# Test 12: ScheduledHybridSelector with linear schedule
+# Test 11: ScheduledHybridSelector with linear schedule
 def test_scheduled_hybrid_linear(mock_cameras_simple, mock_gaussians):
     """Test ScheduledHybridSelector with linear weight interpolation."""
     config = {
-        'selectors': ['random', 'fixed_prob'],
+        'selectors': ['uniform_random', 'geometric'],
         'weights_start': [0.8, 0.2],
         'weights_end': [0.2, 0.8],
         'schedule_type': 'linear',
@@ -501,11 +472,11 @@ def test_scheduled_hybrid_linear(mock_cameras_simple, mock_gaussians):
     print(f"✓ Linear schedule: {weights_start} → {weights_mid} → {weights_end}")
 
 
-# Test 13: ScheduledHybridSelector with step schedule
+# Test 12: ScheduledHybridSelector with step schedule
 def test_scheduled_hybrid_step(mock_cameras_simple, mock_gaussians):
     """Test ScheduledHybridSelector with step schedule."""
     config = {
-        'selectors': ['random', 'fixed_prob', 'epoch_based'],
+        'selectors': ['uniform_random', 'geometric', 'clustering'],
         'schedule_type': 'step',
         'milestones': [
             [0, [0.6, 0.3, 0.1]],
@@ -540,7 +511,7 @@ def test_scheduled_hybrid_step(mock_cameras_simple, mock_gaussians):
     print(f"✓ Step schedule: Phase1={weights_phase1}, Phase2={weights_phase2}, Phase3={weights_phase3}")
 
 
-# Test 14: ScheduledHybridSelector with standard presets
+# Test 13: ScheduledHybridSelector with standard presets
 def test_scheduled_hybrid_presets(mock_cameras_simple, mock_gaussians):
     """Test ScheduledHybridSelector with standard preset configurations."""
     from view_selection import get_standard_config, STANDARD_CONFIGS
@@ -561,7 +532,7 @@ def test_scheduled_hybrid_presets(mock_cameras_simple, mock_gaussians):
         print(f"✓ Preset '{preset_name}' working correctly")
 
 
-# Test 15: ScheduledHybridSelector forwards update_loss
+# Test 14: ScheduledHybridSelector forwards update_loss
 def test_scheduled_hybrid_forwards_updates(mock_cameras_simple, mock_gaussians):
     """Test that ScheduledHybridSelector forwards updates to sub-selectors."""
     config = {

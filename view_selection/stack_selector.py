@@ -1,11 +1,13 @@
 """
-Uniform sampling without replacement selector.
+Stack-based view selection (default baseline).
 
 This selector maintains an internal shuffled queue of camera UIDs and returns
 one camera per selection by popping from the queue. When the queue is empty it
-is refilled with a new random permutation of the available cameras. This
-replicates the original baseline behaviour where views were drawn from a
-`viewpoint_stack` and reinitialized when empty.
+is refilled with a new random permutation of the available cameras.
+
+This replicates the original 3DGS baseline behavior where views were drawn from a
+`viewpoint_stack` and reinitialized when empty. Every view is seen exactly once
+per "epoch", guaranteeing uniform coverage.
 """
 
 import numpy as np
@@ -13,14 +15,18 @@ from typing import Dict, List, Optional
 from .selector import ViewSelector
 
 
-class WithoutReplacementSelector(ViewSelector):
-    """Sample uniformly without replacement.
+class StackBasedSelector(ViewSelector):
+    """Stack-based sampling without replacement (default 3DGS baseline).
+
+    Process:
+    1. Shuffle N cameras into stack
+    2. Pop one per iteration
+    3. Refill when empty
+
+    Every view is seen exactly once per "epoch" - guaranteed uniform coverage.
 
     Config options:
       - seed (int, optional): RNG seed for deterministic shuffles.
-
-    This replicates the original random selection behavior but within the new
-    probability-based framework.
     """
 
     def __init__(self, config: dict = None, log_dir: Optional[str] = None, verbose: bool = False, seed: int = None):
@@ -47,7 +53,7 @@ class WithoutReplacementSelector(ViewSelector):
         self.initialized = True
 
         if self.verbose:
-            print(f"[WithoutReplacementSelector] Initialized with {len(all_cameras)} cameras; seed={self.seed}")
+            print(f"[StackBasedSelector] Initialized with {len(all_cameras)} cameras; seed={self.seed}")
 
     def _refill_queue(self, uids: List[int]) -> None:
         """Shuffle and refill the internal queue."""
