@@ -25,6 +25,7 @@ from .no_replace_selector import WithoutReplacementSelector
 from .loss_selector import LossBasedSelector
 from .gaussian_aware_selector import GaussianAwareSelector
 from .scheduled_hybrid_selector import ScheduledHybridSelector, get_standard_config, STANDARD_CONFIGS
+from .dino_selector import DINOSelector
 
 
 # Registry mapping strategy names to classes
@@ -37,6 +38,7 @@ SELECTOR_REGISTRY = {
     'loss_based': LossBasedSelector,
     'gaussian_aware': GaussianAwareSelector,
     'scheduled_hybrid': ScheduledHybridSelector,
+    'dino': DINOSelector,
 }
 
 
@@ -116,6 +118,7 @@ __all__ = [
     'LossBasedSelector',
     'GaussianAwareSelector',
     'ScheduledHybridSelector',
+    'DINOSelector',
     'build_selector',
     'list_selectors',
     'get_standard_config',

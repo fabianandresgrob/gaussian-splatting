@@ -184,6 +184,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             loss /= opt.optimizer_step_interval  # Gradient accumulation
             loss.backward()
 
+            # Update loss-based selector with this view's loss
+            if hasattr(selector, 'update_loss'):
+                selector.update_loss(viewpoint_cam, loss.item() * opt.optimizer_step_interval)
+
         iter_end.record()
 
         with torch.no_grad():
@@ -374,8 +378,9 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default=None)
-    parser.add_argument("--view_selection_strategy", type=str, default="random", 
-                        choices=["random", "fixed_prob", "epoch_based", "clustering", "no_replace"])
+    parser.add_argument("--view_selection_strategy", type=str, default="random",
+                        choices=["random", "fixed_prob", "epoch_based", "clustering", "no_replace",
+                                 "loss_based", "gaussian_aware", "scheduled_hybrid", "dino"])
     parser.add_argument("--view_selection_config", type=str, default="{}")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--logger", type=str, default="tensorboard",
