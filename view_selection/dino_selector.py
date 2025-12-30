@@ -1,27 +1,30 @@
 """
-DINO feature-based view selection strategy.
+DINO feature-based view selection strategy (improved implementation).
 
-This selector uses DINOv2 embeddings to sample views that maximize feature
-diversity, ensuring the training process sees semantically different views.
+This selector uses DINO embeddings (DINOv2 or DINOv3) to sample views that 
+maximize feature diversity, ensuring the training process sees semantically 
+different views.
 
-STATUS: PLACEHOLDER - Implementation required
-TODO: Implement feature extraction and diversity-based sampling
+Supports:
+    - DINOv2: dinov2_vitb14 (768 dim), dinov2_vitl14 (1024 dim), etc.
+    - DINOv3: dinov3-vitl16 (1024 dim), dinov3-vitb16 (768 dim), etc.
 
-Required implementation steps:
-1. Precompute DINO embeddings for all training images (separate script)
-2. Load embeddings during initialization
-3. Compute diversity scores based on embedding distances
-4. Convert to sampling probabilities
-
-Recommended approach:
-- Use dinov2_vitb14 (good balance of quality and speed)
-- Precompute embeddings once per scene and save as .pt file
-- Load embeddings as {image_name: embedding_tensor} dict
-- Compute pairwise distances or use clustering for diversity
+Usage:
+    1. First extract features for your scene:
+       python extract_dinov3_features.py --data_root ~/data/scenes/data --scene_id <scene_id>
+    
+    2. Use the selector in training:
+       config = {
+           'embeddings_path': '<scene_path>/dslr/dino_features/features.pt',
+           'temperature': 1.0,
+           'diversity_mode': 'distance_to_selected',
+       }
+       selector = build_selector('dino', config=config)
 """
 
 import os
 import numpy as np
+import torch
 from typing import Dict, List, Optional, Any
 from scipy.special import softmax
 from .selector import ViewSelector
@@ -31,24 +34,30 @@ class DINOSelector(ViewSelector):
     """
     Selector that prioritizes views based on DINO feature diversity.
 
-    Uses precomputed DINOv2 embeddings to ensure training samples
+    Uses precomputed DINO embeddings (v2 or v3) to ensure training samples
     semantically diverse views of the scene.
 
     Config parameters:
         - embeddings_path (str): Path to precomputed embeddings (.pt file)
         - temperature (float): Softmax temperature. Default: 1.0
-        - diversity_mode (str): How to compute diversity.
-            - 'distance_to_selected': Prioritize views far from recently selected
-            - 'clustering': Use embedding clusters, sample from underrepresented
+          Higher values = more uniform, lower values = more peaked on diverse views
+        - diversity_mode (str): How to compute diversity scores.
+            - 'distance_to_centroid': Prioritize views far from feature centroid
+            - 'distance_to_selected': Prioritize views far from recently selected (dynamic)
+            - 'average_distance': Score by average distance to other views
             Default: 'distance_to_selected'
-        - recency_window (int): Number of recent selections to consider. Default: 50
+        - recency_window (int): Number of recent selections to consider 
+          (for 'distance_to_selected' mode). Default: 50
+        - normalize_embeddings (bool): L2 normalize embeddings. Default: True
 
-    Precomputed embeddings format:
-        torch.save({
-            'image_name_1': embedding_tensor_1,  # shape: (768,) for vitb14
-            'image_name_2': embedding_tensor_2,
+    Precomputed embeddings format (from extract_dinov3_features.py):
+        {
+            'DSC00001': tensor([...]),  # shape: (embedding_dim,)
+            'DSC00002': tensor([...]),
             ...
-        }, 'embeddings.pt')
+            '_model': 'facebook/dinov3-vitl16-pretrain-lvd1689m',
+            '_embedding_dim': 1024,
+        }
     """
 
     def __init__(
@@ -62,11 +71,7 @@ class DINOSelector(ViewSelector):
         Initialize the DINO selector.
 
         Args:
-            config: Configuration dictionary with optional keys:
-                - embeddings_path (str): Path to precomputed embeddings
-                - temperature (float): Softmax temperature. Default: 1.0
-                - diversity_mode (str): Diversity computation mode. Default: 'distance_to_selected'
-                - recency_window (int): Recent selection window. Default: 50
+            config: Configuration dictionary
             log_dir: Directory to save selection logs
             verbose: If True, print detailed information
             seed: Random seed for reproducibility
@@ -77,16 +82,17 @@ class DINOSelector(ViewSelector):
         self.temperature = self.config.get('temperature', 1.0)
         self.diversity_mode = self.config.get('diversity_mode', 'distance_to_selected')
         self.recency_window = self.config.get('recency_window', 50)
+        self.normalize_embeddings = self.config.get('normalize_embeddings', True)
 
         # Will be populated during initialize()
         self.embeddings = {}  # Dict mapping image_name to embedding
         self.embedding_matrix = None  # (N, D) matrix for fast computation
+        self.cam_idx_to_row = {}  # Map camera index to embedding matrix row
         self.recent_selections = []  # List of recently selected camera indices
+        self.fixed_scores = None  # For static modes (centroid, average_distance)
 
-        if self.verbose:
-            self.logger.debug(f"Configuration: embeddings_path={self.embeddings_path}, "
-                            f"temperature={self.temperature}, mode={self.diversity_mode}, "
-                            f"recency_window={self.recency_window}")
+        self.logger.info(f"DINO Selector config: embeddings_path={self.embeddings_path}, "
+                        f"temperature={self.temperature}, mode={self.diversity_mode}")
 
     def initialize(self, all_cameras: List) -> None:
         """
@@ -101,65 +107,115 @@ class DINOSelector(ViewSelector):
         if self.embeddings_path:
             self._load_embeddings()
         else:
-            # PLACEHOLDER: Fall back to uniform sampling
             self.logger.warning("No embeddings_path provided! Falling back to uniform sampling.")
-            self.logger.info("To use DINO features: ")
-            self.logger.info("  1. Run: python extract_dino_features.py --scene_path <path>")
-            self.logger.info("  2. Pass: embeddings_path=<output_path> in config")
+            self.logger.info("To use DINO features:")
+            self.logger.info("  1. Run: python extract_dino_features.py --data_root <path> --scene_id <id>")
+            self.logger.info("  2. Pass: embeddings_path='<scene_path>/dslr/dino_features/features.pt'")
+
+        # Precompute static scores if using static mode
+        if self.embedding_matrix is not None and self.diversity_mode in ['distance_to_centroid', 'average_distance']:
+            self._compute_fixed_scores()
 
         self.initialized = True
 
     def _load_embeddings(self) -> None:
         """Load precomputed DINO embeddings from file."""
-        import torch
-
         if not os.path.exists(self.embeddings_path):
             raise FileNotFoundError(
                 f"DINO embeddings not found: {self.embeddings_path}\n"
                 f"Run extract_dino_features.py first to precompute embeddings."
             )
 
-        if self.verbose:
-            self.logger.debug(f"Loading embeddings from {self.embeddings_path}")
+        self.logger.info(f"Loading embeddings from {self.embeddings_path}")
 
         self.embeddings = torch.load(self.embeddings_path, map_location='cpu')
+
+        # Extract metadata
+        model_name = self.embeddings.pop('_model', 'unknown')
+        embedding_dim = self.embeddings.pop('_embedding_dim', None)
 
         if not self.embeddings:
             raise ValueError(f"Empty embeddings file: {self.embeddings_path}")
 
-        # Get embedding dimension from first entry
-        first_embedding = next(iter(self.embeddings.values()))
-        embedding_dim = first_embedding.shape[0]
+        # Get embedding dimension from first entry if not in metadata
+        if embedding_dim is None:
+            first_embedding = next(iter(self.embeddings.values()))
+            embedding_dim = first_embedding.shape[0]
+
+        self.logger.info(f"Model: {model_name}, embedding dim: {embedding_dim}")
 
         # Build embedding matrix aligned with camera order
         embeddings_list: List[np.ndarray] = []
         missing_count = 0
 
-        for cam in self.all_cameras:
+        for cam_idx, cam in enumerate(self.all_cameras):
             image_name = cam.image_name
-
+            
+            # Try exact match first
             if image_name in self.embeddings:
-                embeddings_list.append(self.embeddings[image_name].numpy())
+                emb = self.embeddings[image_name]
             else:
-                # Try alternative key formats
-                found = False
-                for key in self.embeddings.keys():
-                    if image_name in key or key in image_name:
-                        embeddings_list.append(self.embeddings[key].numpy())
-                        found = True
-                        break
+                # Try without extension
+                name_no_ext = os.path.splitext(image_name)[0]
+                if name_no_ext in self.embeddings:
+                    emb = self.embeddings[name_no_ext]
+                else:
+                    # Try fuzzy matching
+                    emb = self._fuzzy_match_embedding(image_name, embedding_dim)
+                    if emb is None:
+                        emb = torch.zeros(embedding_dim)
+                        missing_count += 1
 
-                if not found:
-                    # Use zero embedding as fallback
-                    embeddings_list.append(np.zeros(embedding_dim))
-                    missing_count += 1
+            embeddings_list.append(emb.numpy() if isinstance(emb, torch.Tensor) else emb)
+            self.cam_idx_to_row[cam_idx] = len(embeddings_list) - 1
 
         self.embedding_matrix = np.stack(embeddings_list)
 
-        if self.verbose:
-            self.logger.debug(f"Loaded {len(self.embeddings)} embeddings, shape={self.embedding_matrix.shape}")
-            if missing_count > 0:
-                self.logger.warning(f"{missing_count} cameras missing embeddings")
+        # Optionally normalize embeddings
+        if self.normalize_embeddings:
+            norms = np.linalg.norm(self.embedding_matrix, axis=1, keepdims=True)
+            norms = np.where(norms > 1e-8, norms, 1.0)  # Avoid division by zero
+            self.embedding_matrix = self.embedding_matrix / norms
+
+        self.logger.info(f"Loaded embeddings for {len(self.all_cameras)} cameras, "
+                        f"shape={self.embedding_matrix.shape}")
+        if missing_count > 0:
+            self.logger.warning(f"{missing_count} cameras missing embeddings (using zero vectors)")
+
+    def _fuzzy_match_embedding(self, image_name: str, embedding_dim: int) -> Optional[torch.Tensor]:
+        """Try to find embedding with fuzzy matching."""
+        # Try various name formats
+        for key in self.embeddings.keys():
+            if image_name in key or key in image_name:
+                return self.embeddings[key]
+            # Handle DSC vs DSC_ prefixes
+            if image_name.replace('DSC', 'DSC_') == key or key.replace('DSC', 'DSC_') == image_name:
+                return self.embeddings[key]
+        return None
+
+    def _compute_fixed_scores(self) -> None:
+        """Compute fixed diversity scores for static modes."""
+        n_cameras = len(self.all_cameras)
+        
+        if self.diversity_mode == 'distance_to_centroid':
+            # Score = distance from centroid (farther = more unique)
+            centroid = np.mean(self.embedding_matrix, axis=0, keepdims=True)
+            distances = np.linalg.norm(self.embedding_matrix - centroid, axis=1)
+            self.fixed_scores = distances
+            
+        elif self.diversity_mode == 'average_distance':
+            # Score = average distance to other views (higher = more unique)
+            # Use cosine distance for efficiency
+            similarity_matrix = self.embedding_matrix @ self.embedding_matrix.T
+            # Convert to distance (1 - similarity for normalized vectors)
+            distance_matrix = 1 - similarity_matrix
+            # Average distance excluding self (diagonal)
+            np.fill_diagonal(distance_matrix, 0)
+            self.fixed_scores = distance_matrix.sum(axis=1) / (n_cameras - 1)
+
+        self.logger.info(f"Computed fixed scores: min={self.fixed_scores.min():.4f}, "
+                        f"max={self.fixed_scores.max():.4f}, "
+                        f"mean={self.fixed_scores.mean():.4f}")
 
     def compute_probabilities(self, gaussians, iteration: int) -> Dict[int, float]:
         """
@@ -179,15 +235,16 @@ class DINOSelector(ViewSelector):
             uniform_prob = 1.0 / n_cameras
             return {cam.uid: uniform_prob for cam in self.all_cameras}
 
-        # Compute diversity scores based on mode
+        # Compute scores based on mode
         if self.diversity_mode == 'distance_to_selected':
-            scores = self._compute_distance_scores()
-        elif self.diversity_mode == 'clustering':
-            scores = self._compute_clustering_scores()
+            scores = self._compute_distance_to_selected_scores()
+        elif self.diversity_mode in ['distance_to_centroid', 'average_distance']:
+            scores = self.fixed_scores
         else:
+            self.logger.warning(f"Unknown diversity_mode: {self.diversity_mode}, using uniform")
             scores = np.ones(n_cameras)
 
-        # Convert to probabilities
+        # Convert to probabilities using softmax with temperature
         probabilities = softmax(scores / self.temperature)
 
         return {
@@ -195,7 +252,7 @@ class DINOSelector(ViewSelector):
             for i, cam in enumerate(self.all_cameras)
         }
 
-    def _compute_distance_scores(self) -> np.ndarray:
+    def _compute_distance_to_selected_scores(self) -> np.ndarray:
         """
         Compute scores based on distance to recently selected views.
 
@@ -204,51 +261,58 @@ class DINOSelector(ViewSelector):
         n_cameras = len(self.all_cameras)
 
         if not self.recent_selections:
-            # No history yet - use uniform
-            return np.ones(n_cameras)
+            # No history yet, fall back to distance from centroid
+            centroid = np.mean(self.embedding_matrix, axis=0, keepdims=True)
+            return np.linalg.norm(self.embedding_matrix - centroid, axis=1)
 
         # Get embeddings of recently selected cameras
         recent_indices = self.recent_selections[-self.recency_window:]
         recent_embeddings = self.embedding_matrix[recent_indices]
 
-        # Compute distance from each camera to nearest recent selection
-        scores = np.zeros(n_cameras)
-
-        for i in range(n_cameras):
-            # Cosine distance to all recent selections
-            embedding = self.embedding_matrix[i]
-            distances = 1 - np.dot(recent_embeddings, embedding) / (
-                np.linalg.norm(recent_embeddings, axis=1) * np.linalg.norm(embedding) + 1e-8
-            )
-            # Score is minimum distance (furthest from all recent)
-            scores[i] = np.min(distances)
+        # Compute similarity to recent selections (using dot product for normalized vectors)
+        # Shape: (n_cameras, n_recent)
+        similarities = self.embedding_matrix @ recent_embeddings.T
+        
+        # Score = 1 - max_similarity (furthest from any recent selection)
+        max_similarities = similarities.max(axis=1)
+        scores = 1.0 - max_similarities
 
         return scores
-
-    def _compute_clustering_scores(self) -> np.ndarray:
-        """
-        Compute scores based on embedding clusters.
-
-        Views from underrepresented clusters get higher scores.
-        """
-        # TODO: Implement clustering-based diversity
-        # This would cluster embeddings and weight inversely by cluster selection count
-        return np.ones(len(self.all_cameras))
 
     def log_selection(self, cam: Any, score: float, iteration: int) -> None:
         """Record selection for diversity tracking."""
         super().log_selection(cam, score, iteration)
 
         # Track camera index for distance computation
-        cam_idx: Optional[int] = None
         for i, c in enumerate(self.all_cameras):
             if c.uid == cam.uid:
-                cam_idx = i
+                self.recent_selections.append(i)
                 break
 
-        if cam_idx is not None:
-            self.recent_selections.append(cam_idx)
+        # Keep only recent selections to limit memory
+        if len(self.recent_selections) > self.recency_window * 2:
+            self.recent_selections = self.recent_selections[-self.recency_window:]
 
-            # Keep only recent selections
-            if len(self.recent_selections) > self.recency_window * 2:
-                self.recent_selections = self.recent_selections[-self.recency_window:]
+    def get_diversity_statistics(self) -> Dict[str, Any]:
+        """Get statistics about feature diversity."""
+        stats = {
+            'diversity_mode': self.diversity_mode,
+            'temperature': self.temperature,
+            'recency_window': self.recency_window,
+            'n_recent_selections': len(self.recent_selections),
+        }
+        
+        if self.embedding_matrix is not None:
+            # Compute pairwise similarities
+            sim_matrix = self.embedding_matrix @ self.embedding_matrix.T
+            np.fill_diagonal(sim_matrix, 0)
+            
+            stats['embedding_stats'] = {
+                'n_embeddings': len(self.embedding_matrix),
+                'embedding_dim': self.embedding_matrix.shape[1],
+                'mean_pairwise_similarity': float(sim_matrix.mean()),
+                'max_pairwise_similarity': float(sim_matrix.max()),
+                'min_pairwise_similarity': float(sim_matrix.min()),
+            }
+        
+        return stats
