@@ -145,6 +145,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     except:
         config = {}
 
+    # Provide dataset root to selectors for robust path resolution (e.g., DINO embeddings).
+    if isinstance(config, dict) and getattr(dataset, "source_path", None):
+        config.setdefault("source_path", dataset.source_path)
+
     # Configure logging for view selection module
     configure_logging(log_dir=dataset.model_path, level="INFO", use_tqdm_handler=True)
     

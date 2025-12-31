@@ -157,10 +157,15 @@ class ScheduledHybridSelector(ViewSelector):
 
         # Create sub-selectors
         self.sub_selectors = []
+        source_path = self.config.get("source_path", None)
         for name in self.selector_names:
             # Get selector-specific config if provided
             sub_config_key = f'{name}_config'
             sub_config = self.config.get(sub_config_key, {})
+
+            # Ensure sub-selector sees dataset root for path resolution (e.g., DINO embeddings).
+            if source_path and isinstance(sub_config, dict):
+                sub_config.setdefault("source_path", source_path)
 
             # Create selector
             selector = build_selector(

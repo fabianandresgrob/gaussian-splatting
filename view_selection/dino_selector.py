@@ -78,11 +78,20 @@ class DINOSelector(ViewSelector):
         """
         super().__init__(config, log_dir, verbose, seed)
 
+        # embeddings_path options:
+        # - explicit path to .pt
+        # - "auto" to infer from camera.image_path at initialize()
+        # - None to infer (best-effort) or fall back depending on flags
         self.embeddings_path = self.config.get('embeddings_path', None)
         self.temperature = self.config.get('temperature', 1.0)
         self.diversity_mode = self.config.get('diversity_mode', 'distance_to_selected')
         self.recency_window = self.config.get('recency_window', 50)
         self.normalize_embeddings = self.config.get('normalize_embeddings', True)
+
+        # Behavior controls
+        # If True, raise if embeddings cannot be located/loaded.
+        # If False, fall back to uniform sampling (but log loudly).
+        self.require_embeddings = bool(self.config.get('require_embeddings', False))
 
         # Will be populated during initialize()
         self.embeddings = {}  # Dict mapping image_name to embedding
@@ -103,20 +112,95 @@ class DINOSelector(ViewSelector):
         """
         super().initialize(all_cameras)
 
+        # Treat "auto" as a sentinel, not a literal filesystem path
+        if self.embeddings_path == "auto":
+            self.embeddings_path = None
+
+        # Prefer resolving from source_path (passed from training script)
+        source_path = self.config.get("source_path", None)
+        if not self.embeddings_path and source_path:
+            inferred = self._infer_embeddings_path_from_source_path(source_path)
+            if inferred:
+                self.embeddings_path = inferred
+                self.logger.info(f"Inferred embeddings_path from source_path: {self.embeddings_path}")
+            else:
+                self.logger.warning(
+                    f"Could not find DINO embeddings under source_path={source_path}. "
+                    "Expected <source_path>/dino_features/features.pt."
+                )
+
+        # If embeddings_path is "auto" or not provided, try to infer it from the dataset layout
+        # For ScanNet++/nerfstudio-style layouts, camera.image_path typically looks like:
+        #   <scene_root>/resized_undistorted_images/<filename>.JPG
+        # and embeddings are stored at:
+        #   <scene_root>/dino_features/features.pt
+        if not self.embeddings_path and self.all_cameras:
+            inferred = self._infer_embeddings_path_from_cameras(self.all_cameras)
+            if inferred:
+                self.embeddings_path = inferred
+                self.logger.info(f"Inferred embeddings_path: {self.embeddings_path}")
+            else:
+                self.logger.warning(
+                    "Could not infer embeddings_path from camera image paths. "
+                    "Expected <scene_root>/dino_features/features.pt."
+                )
+
         # Load embeddings if path provided
         if self.embeddings_path:
-            self._load_embeddings()
+            try:
+                self._load_embeddings()
+            except Exception as e:
+                if self.require_embeddings:
+                    raise
+                self.logger.warning(f"Failed to load DINO embeddings ({self.embeddings_path}): {e}. Falling back to uniform sampling.")
         else:
-            self.logger.warning("No embeddings_path provided! Falling back to uniform sampling.")
+            if self.require_embeddings:
+                raise FileNotFoundError(
+                    "DINOSelector requires embeddings, but no embeddings_path was provided and inference failed. "
+                    "Set embeddings_path explicitly or use embeddings_path='auto' with a standard dataset layout."
+                )
+
+            self.logger.warning("No embeddings_path available. Falling back to uniform sampling.")
             self.logger.info("To use DINO features:")
-            self.logger.info("  1. Run: python extract_dino_features.py --data_root <path> --scene_id <id>")
-            self.logger.info("  2. Pass: embeddings_path='<scene_path>/dslr/dino_features/features.pt'")
+            self.logger.info("  - Pass embeddings_path='<scene_root>/dino_features/features.pt'")
+            self.logger.info("  - Or pass embeddings_path='auto' (recommended) and keep the standard folder layout")
 
         # Precompute static scores if using static mode
         if self.embedding_matrix is not None and self.diversity_mode in ['distance_to_centroid', 'average_distance']:
             self._compute_fixed_scores()
 
         self.initialized = True
+
+    def _infer_embeddings_path_from_cameras(self, cameras: List) -> Optional[str]:
+        """Infer embeddings path from camera image paths if possible."""
+        # Only attempt inference if camera objects expose image_path.
+        cam0 = cameras[0]
+        image_path = getattr(cam0, "image_path", None)
+        if not image_path:
+            return None
+
+        # scene_root = <...>/dslr (or equivalent)
+        # image_path = <scene_root>/resized_undistorted_images/<file>
+        scene_root = os.path.dirname(os.path.dirname(image_path))
+        candidates = [
+            os.path.join(scene_root, "dino_features", "features.pt"),
+            os.path.join(scene_root, "dino_features", "embeddings.pt"),
+        ]
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
+    def _infer_embeddings_path_from_source_path(self, source_path: str) -> Optional[str]:
+        """Infer embeddings path from dataset source path (recommended)."""
+        candidates = [
+            os.path.join(source_path, "dino_features", "features.pt"),
+            os.path.join(source_path, "dino_features", "embeddings.pt"),
+        ]
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return candidate
+        return None
 
     def _load_embeddings(self) -> None:
         """Load precomputed DINO embeddings from file."""

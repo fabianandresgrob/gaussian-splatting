@@ -292,6 +292,8 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         strategy="dino",  # PLACEHOLDER - not yet implemented
         config={
             "model": "dinov2_vitb14",
+            "embeddings_path": "auto",
+            "require_embeddings": True,
             "temperature": 1.0,
             "diversity_weight": 1.0
         },
@@ -356,6 +358,8 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             },
             "dino_config": {
                 "model": "dinov2_vitb14",
+                "embeddings_path": "auto",
+                "require_embeddings": True,
                 "temperature": 1.0
             }
         },
