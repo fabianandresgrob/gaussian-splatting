@@ -1,23 +1,23 @@
-Erstelle view_selection/vggt_selector.py
+# Erstelle view_selection/vggt_selector.py
 
-=== KONZEPT ===
-VGGT (Visual Geometry Grounded Transformer) generiert aus einem Bild eine 3D-Punktwolke.
-Wir nutzen das als "Prior" - wenn die VGGT-Punktwolke stark von unseren Gaussians abweicht,
-ist diese Region wahrscheinlich noch nicht gut rekonstruiert.
+# === KONZEPT ===
+# VGGT (Visual Geometry Grounded Transformer) generiert aus einem Bild eine 3D-Punktwolke.
+# Wir nutzen das als "Prior" - wenn die VGGT-Punktwolke stark von unseren Gaussians abweicht,
+# ist diese Region wahrscheinlich noch nicht gut rekonstruiert.
 
-Score = Chamfer Distance zwischen VGGT-Punktwolke und nahegelegenen Gaussians
-Hoher Score = hohe Diskrepanz = informative View
+# Score = Chamfer Distance zwischen VGGT-Punktwolke und nahegelegenen Gaussians
+# Hoher Score = hohe Diskrepanz = informative View
 
-=== DEPENDENCIES ===
-VGGT muss separat installiert werden:
-  pip install vggt  # oder von GitHub klonen
+# === DEPENDENCIES ===
+# VGGT muss separat installiert werden:
+#   pip install vggt  # oder von GitHub klonen
   
-Das Modell ist groß (~1GB), daher:
-- Lazy loading beim ersten Aufruf
-- Caching der VGGT-Vorhersagen pro Kamera
-- Nur periodisch neu berechnen (update_frequency)
+# Das Modell ist groß (~1GB), daher:
+# - Lazy loading beim ersten Aufruf
+# - Caching der VGGT-Vorhersagen pro Kamera
+# - Nur periodisch neu berechnen (update_frequency)
 
-=== IMPLEMENTIERUNG ===
+# === IMPLEMENTIERUNG ===
 
 class VGGTSelector(ViewSelector):
     def __init__(self, config: dict = None, ...):
@@ -161,36 +161,36 @@ class VGGTSelector(ViewSelector):
         
         return {uid: float(prob) for uid, prob in zip(uids, probs)}
 
-=== REGISTRIERUNG ===
-In __init__.py:
-    from .vggt_selector import VGGTSelector
+# === REGISTRIERUNG ===
+# In __init__.py:
+#     from .vggt_selector import VGGTSelector
     
-    SELECTOR_REGISTRY['vggt'] = VGGTSelector
+#     SELECTOR_REGISTRY['vggt'] = VGGTSelector
 
-=== FALLBACK ===
-Falls VGGT nicht verfügbar ist, sollte der Selector graceful degraden:
-- Beim Import-Error: Warnung ausgeben und auf uniform sampling zurückfallen
-- Optional: Lightweight alternative (z.B. Depth Anything) als config option
+# === FALLBACK ===
+# Falls VGGT nicht verfügbar ist, sollte der Selector graceful degraden:
+# - Beim Import-Error: Warnung ausgeben und auf uniform sampling zurückfallen
+# - Optional: Lightweight alternative (z.B. Depth Anything) als config option
 
-=== USAGE ===
-config = {
-    'model_name': 'vggt-1b',
-    'update_frequency': 2000,  # VGGT ist teuer, selten updaten
-    'temperature': 1.0,
-    'cache_predictions': True,
-}
-selector = build_selector('vggt', config=config)
+# === USAGE ===
+# config = {
+#     'model_name': 'vggt-1b',
+#     'update_frequency': 2000,  # VGGT ist teuer, selten updaten
+#     'temperature': 1.0,
+#     'cache_predictions': True,
+# }
+# selector = build_selector('vggt', config=config)
 
-=== HYBRID INTEGRATION ===
-Im ScheduledHybridSelector kann VGGT als späte Phase verwendet werden:
-{
-    "selectors": ["clustering", "loss_based", "vggt"],
-    "weights_start": [0.5, 0.4, 0.1],
-    "weights_end": [0.1, 0.3, 0.6],
-    "schedule_type": "linear",
-    "max_iterations": 30000,
-    "vggt_config": {
-        "update_frequency": 2000,
-        "cache_predictions": True
-    }
-}
+# === HYBRID INTEGRATION ===
+# Im ScheduledHybridSelector kann VGGT als späte Phase verwendet werden:
+# {
+#     "selectors": ["clustering", "loss_based", "vggt"],
+#     "weights_start": [0.5, 0.4, 0.1],
+#     "weights_end": [0.1, 0.3, 0.6],
+#     "schedule_type": "linear",
+#     "max_iterations": 30000,
+#     "vggt_config": {
+#         "update_frequency": 2000,
+#         "cache_predictions": True
+#     }
+# }

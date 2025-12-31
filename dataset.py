@@ -32,6 +32,8 @@ def readScannetppInfo(rootdir):
         R = np.transpose(qvec2rotmat(image.qvec))
         T = np.array(image.tvec)
         extrinsic_dict[filename] = (R, T)
+        # Also store a case-insensitive key for robustness on Linux filesystems.
+        extrinsic_dict[filename.lower()] = (R, T)
 
     ply_path = os.path.join(rootdir, "colmap/points3D.ply")
 
@@ -46,35 +48,61 @@ def readScannetppInfo(rootdir):
     fx = transforms["fl_x"]
     fy = transforms["fl_y"]
 
-    # Read frames
+    # Read frames (nerfstudio provides explicit file list; do not rely on directory listing)
     frames = transforms["frames"]
-    # Sort frames by file_path
     frames = sorted(frames, key=lambda x: x["file_path"])
     if len(frames) > MAX_NUM_IMAGES_PER_SCENE:
         # Uniformly sample MAX_NUM_IMAGES_PER_SCENE frames
         sample_indices = np.linspace(0, len(frames) - 1, MAX_NUM_IMAGES_PER_SCENE, dtype=np.int32)
         frames = [frames[idx] for idx in sample_indices]
 
-    if "test_frames" in transforms:
-        test_frames = transforms["test_frames"]
-    else:
-        # Subsample 10 test frames from the training frames
-        sample_indices = np.linspace(0, len(frames) - 1, 10, dtype=np.int32)
+    test_frames = transforms.get("test_frames", None)
+
+    def _frame_has_image_and_extrinsics(frame: dict) -> bool:
+        fp = frame.get("file_path", "")
+        if not fp:
+            return False
+        image_path = os.path.join(images_dir, fp)
+        if not os.path.exists(image_path):
+            return False
+        # COLMAP images.txt typically uses the original filename; match case-insensitively too.
+        return (fp in extrinsic_dict) or (fp.lower() in extrinsic_dict)
+
+    # Filter out frames that reference missing resized images (common when preprocessing is incomplete)
+    frames = [fr for fr in frames if _frame_has_image_and_extrinsics(fr)]
+    if test_frames is not None:
+        test_frames = [fr for fr in test_frames if _frame_has_image_and_extrinsics(fr)]
+
+    # If no valid test frames remain, create a small test split from training frames.
+    # This is required because train_gsplat.py's final evaluation asserts at least 1 test camera.
+    if not test_frames or len(test_frames) == 0:
+        # Subsample up to 10 test frames from the (filtered) training frames.
+        n_test = min(10, len(frames))
+        if n_test == 0:
+            raise FileNotFoundError(
+                f"No valid frames found for scene at {rootdir}. "
+                f"Expected images under {images_dir} and COLMAP extrinsics under {camera_extrinsic_path}."
+            )
+        sample_indices = np.linspace(0, len(frames) - 1, n_test, dtype=np.int32)
         test_frames = [frames[idx] for idx in sample_indices]
-        frames = [frame for idx, frame in enumerate(frames) if idx not in sample_indices]
+        frames = [frame for idx, frame in enumerate(frames) if idx not in set(sample_indices.tolist())]
 
     num_train_frames = len(frames)
     
-    # Validate dimensions with the first image
-    first_image_path = os.path.join(images_dir, frames[0]["file_path"])
+    # Validate dimensions with the first available image
+    first_image_path = os.path.join(images_dir, frames[0]["file_path"]) if len(frames) > 0 else os.path.join(images_dir, test_frames[0]["file_path"])
     with Image.open(first_image_path) as img:
         assert img.size[0] == width, f"Image width {img.size[0]} doesn't match transforms width {width}"
         assert img.size[1] == height, f"Image height {img.size[1]} doesn't match transforms height {height}"
     
     for idx, frame in tqdm(enumerate(frames + test_frames), desc="Loading frames", total=len(frames + test_frames)):
-        R, T = extrinsic_dict[frame["file_path"]]
+        fp = frame["file_path"]
+        if fp in extrinsic_dict:
+            R, T = extrinsic_dict[fp]
+        else:
+            R, T = extrinsic_dict[fp.lower()]
 
-        image_path = os.path.join(images_dir, frame["file_path"])
+        image_path = os.path.join(images_dir, fp)
         image_name = Path(image_path).stem
         FovY = focal2fov(fy, height)
         FovX = focal2fov(fx, width)

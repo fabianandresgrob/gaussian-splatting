@@ -20,8 +20,8 @@ We evaluate view selection strategies across multiple axes:
 EXPERIMENTAL SETUP:
 -------------------
   - Iterations: 30,000 per run
-  - Checkpoints: [1000, 3000, 7000, 15000, 30000] for early-stopping analysis
-  - Test evaluations: [1000, 3000, 7000, 15000, 30000]
+  - Checkpoints: [1000, 5000, 10000, 15000, 20000, 30000] for early-stopping analysis
+  - Test evaluations: [1000, 2500, 5000, 7500, 10000, 12500, 15000, 17500, 20000, 25000, 30000]
   - Metrics: PSNR, SSIM, LPIPS (computed on held-out test views)
 
 TIER 1: CORE ABLATIONS (10 scenes x 5 seeds = 50 runs per config)
@@ -585,12 +585,12 @@ DEFAULT_SEEDS_TIER2 = [0, 1, 2]
 
 TRAINING_DEFAULTS = {
     "iterations": 30000,
-    "test_iterations": [1000, 3000, 7000, 15000, 30000],
+    "test_iterations": [1000, 2500, 5000, 7500, 10000, 12500, 15000, 17500, 20000, 25000, 30000],
     "save_iterations": [1000, 3000, 7000, 15000, 30000],  # Multiple checkpoints for analysis
     "checkpoint_iterations": [7000, 15000, 30000],  # PyTorch checkpoints for resume
-    "data_device": "cuda",
+    "data_device": "cpu",
     "resolution": 2,  # Half resolution for speed (adjust as needed)
-    "logger": "tensorboard",
+    "logger": "wandb",
 }
 
 
@@ -618,9 +618,9 @@ class AblationRunner:
         scenes_tier2: Optional[List[str]] = None,
         seeds_tier1: Optional[List[int]] = None,
         seeds_tier2: Optional[List[int]] = None,
-        logger_backend: str = "tensorboard",
-        wandb_project: str = "3dgs-ablation",
-        wandb_entity: Optional[str] = None,
+        logger_backend: str = "wandb",
+        wandb_project: str = "3DGS",
+        wandb_entity: str = "fabian-grob-technical-university-of-munich",
         verbose: bool = True,
         skip_dino: bool = True,
     ):
@@ -736,6 +736,12 @@ class AblationRunner:
             # Generate runs for each scene × seed combination
             for scene in scenes:
                 scene_path = self._get_scene_path(scene)
+
+                if not os.path.exists(scene_path):
+                    self.logger.warning(
+                        f"Skipping scene '{scene}': path not found under data_root: {scene_path}"
+                    )
+                    continue
 
                 for seed in seeds:
                     run = RunConfig(
@@ -1101,8 +1107,8 @@ Examples:
         "--logger",
         type=str,
         choices=["tensorboard", "wandb", "none"],
-        default="tensorboard",
-        help="Logging backend (default: tensorboard)"
+        default="wandb",
+        help="Logging backend (default: wandb)"
     )
     parser.add_argument(
         "--wandb_project",

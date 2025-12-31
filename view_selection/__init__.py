@@ -29,9 +29,18 @@ from .stack_selector import StackBasedSelector
 from .loss_selector import LossBasedSelector
 from .gaussian_aware_selector import GaussianAwareSelector
 from .scheduled_hybrid_selector import ScheduledHybridSelector, get_standard_config, STANDARD_CONFIGS
-from .dino_selector import DINOSelector
-from .vggt_selector import VGGTSelector
 from .logging_utils import configure_logging, get_logger
+
+# Optional selectors (may require extra deps / may be incomplete)
+try:
+    from .dino_selector import DINOSelector
+except Exception:  # pragma: no cover
+    DINOSelector = None
+
+try:
+    from .vggt_selector import VGGTSelector
+except Exception:  # pragma: no cover
+    VGGTSelector = None
 
 # Legacy aliases for backward compatibility
 RandomSelector = UniformRandomSelector
@@ -49,13 +58,17 @@ SELECTOR_REGISTRY = {
     'loss_based': LossBasedSelector,
     'gaussian_aware': GaussianAwareSelector,
     'scheduled_hybrid': ScheduledHybridSelector,
-    'dino': DINOSelector,
-    'vggt': VGGTSelector,
     # Legacy aliases for backward compatibility
     'random': UniformRandomSelector,
     'fixed_prob': GeometricDiversitySelector,
     'no_replace': StackBasedSelector,
 }
+
+if DINOSelector is not None:
+    SELECTOR_REGISTRY['dino'] = DINOSelector
+
+if VGGTSelector is not None:
+    SELECTOR_REGISTRY['vggt'] = VGGTSelector
 
 
 def build_selector(selector_type: str, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None) -> ViewSelector:
@@ -134,8 +147,6 @@ __all__ = [
     'LossBasedSelector',
     'GaussianAwareSelector',
     'ScheduledHybridSelector',
-    'DINOSelector',
-    'VGGTSelector',
     # Legacy aliases
     'RandomSelector',
     'FixedProbabilitySelector',
@@ -150,3 +161,9 @@ __all__ = [
     'configure_logging',
     'get_logger',
 ]
+
+if DINOSelector is not None:
+    __all__.append('DINOSelector')
+
+if VGGTSelector is not None:
+    __all__.append('VGGTSelector')

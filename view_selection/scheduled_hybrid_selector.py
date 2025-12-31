@@ -8,7 +8,6 @@ enabling adaptive strategies that evolve during training.
 import numpy as np
 from typing import Dict, List, Tuple
 from .selector import ViewSelector
-from . import build_selector
 
 
 # Standard configurations for common training strategies
@@ -96,6 +95,9 @@ class ScheduledHybridSelector(ViewSelector):
             seed: Random seed for reproducibility
         """
         super().__init__(config, log_dir, verbose, seed)
+
+        # Local import to avoid circular import with view_selection/__init__.py
+        from . import build_selector
 
         # Check for preset configuration
         if 'preset' in self.config:
