@@ -632,6 +632,9 @@ class AblationRunner:
         minimal_disk: bool = True,
         keep_wandb_local: bool = True,
         disable_selection_logs: bool = False,
+        training_params: Optional[Dict[str, Any]] = None,
+        no_save: bool = False,
+        skip_final_eval: bool = False,
     ):
         """
         Initialize the ablation runner.
@@ -667,6 +670,12 @@ class AblationRunner:
         self.minimal_disk = minimal_disk
         self.keep_wandb_local = keep_wandb_local
         self.disable_selection_logs = disable_selection_logs
+
+        self.training_params = TRAINING_DEFAULTS.copy()
+        if training_params:
+            self.training_params.update(training_params)
+        self.no_save = no_save
+        self.skip_final_eval = skip_final_eval
 
         # Load experiment configs
         self.all_configs = get_all_experiment_configs()
@@ -841,36 +850,49 @@ class AblationRunner:
             "--seed", str(run_config.seed),
             "--view_selection_strategy", run_config.experiment.strategy,
             "--view_selection_config", run_config.experiment.get_config_json(),
-            "--iterations", str(TRAINING_DEFAULTS["iterations"]),
-            "--data_device", TRAINING_DEFAULTS["data_device"],
-            "--resolution", str(TRAINING_DEFAULTS["resolution"]),
+            "--iterations", str(self.training_params["iterations"]),
+            "--data_device", self.training_params["data_device"],
+            "--resolution", str(self.training_params["resolution"]),
             "--logger", self.logger_backend,
         ]
 
         if start_checkpoint:
             cmd.extend(["--start_checkpoint", start_checkpoint])
 
+        if self.no_save:
+            cmd.append("--no_save")
+        if self.skip_final_eval:
+            cmd.append("--skip_final_eval")
+
         # Add test iterations
-        cmd.extend(["--test_iterations"] + [str(i) for i in TRAINING_DEFAULTS["test_iterations"]])
+        cmd.extend(["--test_iterations"] + [str(i) for i in self.training_params["test_iterations"]])
 
         # Disk-minimal defaults:
         # - Do not write point_cloud/*.ply snapshots
         # - Do not write checkpoints on success
         # - Still write a checkpoint on interrupt/crash for resume/debug
-        # - Do not write per-iteration view-selection logs
+        # - Keep view-selection logs by default (selection_history.jsonl, view_selection_*.log)
+        #   so we can analyze what was selected; disable explicitly via --disable_selection_logs.
         if self.minimal_disk:
-            cmd.append("--no_save")
-            cmd.append("--no_checkpoints")
-            cmd.append("--checkpoint_on_interrupt")
-            if self.disable_selection_logs:
+            if "--no_save" not in cmd:
+                cmd.append("--no_save")
+            if "--no_checkpoints" not in cmd:
+                cmd.append("--no_checkpoints")
+            if "--checkpoint_on_interrupt" not in cmd:
+                cmd.append("--checkpoint_on_interrupt")
+            if self.disable_selection_logs and "--disable_view_selection_logs" not in cmd:
                 cmd.append("--disable_view_selection_logs")
         else:
+            # Optional: allow disabling view-selection logs even in full-disk mode
+            if self.disable_selection_logs:
+                cmd.append("--disable_view_selection_logs")
+
             # Add save iterations
-            if TRAINING_DEFAULTS["save_iterations"]:
-                cmd.extend(["--save_iterations"] + [str(i) for i in TRAINING_DEFAULTS["save_iterations"]])
+            if self.training_params.get("save_iterations"):
+                cmd.extend(["--save_iterations"] + [str(i) for i in self.training_params["save_iterations"]])
             # Add checkpoint iterations
-            if TRAINING_DEFAULTS["checkpoint_iterations"]:
-                cmd.extend(["--checkpoint_iterations"] + [str(i) for i in TRAINING_DEFAULTS["checkpoint_iterations"]])
+            if self.training_params.get("checkpoint_iterations"):
+                cmd.extend(["--checkpoint_iterations"] + [str(i) for i in self.training_params["checkpoint_iterations"]])
 
         # Add wandb config if using wandb
         if self.logger_backend == "wandb":
@@ -1256,6 +1278,57 @@ Examples:
         help="Reduce output verbosity"
     )
 
+    # Training overrides (useful for smoke tests)
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=TRAINING_DEFAULTS["iterations"],
+        help="Override training iterations for all runs"
+    )
+    parser.add_argument(
+        "--resolution",
+        type=int,
+        default=TRAINING_DEFAULTS["resolution"],
+        help="Override training resolution for all runs"
+    )
+    parser.add_argument(
+        "--data_device",
+        type=str,
+        default=TRAINING_DEFAULTS["data_device"],
+        help="Override data_device for all runs (e.g., cpu)"
+    )
+    parser.add_argument(
+        "--test_iterations",
+        nargs="+",
+        type=int,
+        default=TRAINING_DEFAULTS["test_iterations"],
+        help="Override --test_iterations passed to train_gsplat.py"
+    )
+    parser.add_argument(
+        "--save_iterations",
+        nargs="+",
+        type=int,
+        default=TRAINING_DEFAULTS["save_iterations"],
+        help="Override --save_iterations passed to train_gsplat.py"
+    )
+    parser.add_argument(
+        "--checkpoint_iterations",
+        nargs="+",
+        type=int,
+        default=TRAINING_DEFAULTS["checkpoint_iterations"],
+        help="Override --checkpoint_iterations passed to train_gsplat.py"
+    )
+    parser.add_argument(
+        "--no_save",
+        action="store_true",
+        help="Pass --no_save to train_gsplat.py (skip saving gaussians/checkpoints as configured there)"
+    )
+    parser.add_argument(
+        "--skip_final_eval",
+        action="store_true",
+        help="Pass --skip_final_eval to train_gsplat.py (avoid final LPIPS eval; useful for smoke tests)"
+    )
+
     return parser.parse_args()
 
 
@@ -1309,6 +1382,16 @@ def main():
         minimal_disk=not args.full_disk,
         keep_wandb_local=not args.delete_wandb_local,
         disable_selection_logs=args.disable_selection_logs,
+        training_params={
+            "iterations": args.iterations,
+            "resolution": args.resolution,
+            "data_device": args.data_device,
+            "test_iterations": args.test_iterations,
+            "save_iterations": args.save_iterations,
+            "checkpoint_iterations": args.checkpoint_iterations,
+        },
+        no_save=args.no_save,
+        skip_final_eval=args.skip_final_eval,
     )
 
     # Print experiment summary

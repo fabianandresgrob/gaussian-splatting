@@ -115,10 +115,11 @@ def training(
     logger_backend="tensorboard",
     wandb_project="3dgs-view-selection",
     wandb_entity=None,
-    use_gui=False,
+    use_gui: bool = False,
     no_checkpoints: bool = False,
     checkpoint_on_interrupt: bool = False,
     disable_view_selection_logs: bool = False,
+    skip_final_eval: bool = False,
 ):
     print(f"positions: init={opt.position_lr_init} final={opt.position_lr_final} delay_mult={opt.position_lr_delay_mult} max_steps={opt.position_lr_max_steps}")
     print(f"feature={opt.feature_lr} opacity={opt.opacity_lr} scaling={opt.scaling_lr} rotation={opt.rotation_lr}")
@@ -175,7 +176,8 @@ def training(
     selector.initialize(scene.getTrainCameras())
 
     ema_loss_for_log = 0.0
-    progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
+    start_iter = first_iter + 1
+    progress_bar = tqdm(range(start_iter, opt.iterations + 1), desc="Training progress")
     
     # List to store metrics for retrospective analysis
     metrics_history = []
@@ -188,93 +190,115 @@ def training(
     last_completed_iteration = first_iter
 
     try:
-        first_iter += 1
-        for iteration in range(first_iter, opt.iterations + 1):
+        for iteration in range(start_iter, opt.iterations + 1):
             last_completed_iteration = iteration
             iter_start.record()
 
-        gaussians.update_learning_rate(iteration)
+            gaussians.update_learning_rate(iteration)
 
-        # Every 1000 its we increase the levels of SH up to a maximum degree
-        if iteration % 1000 == 0:
-            gaussians.oneupSHdegree()
+            # Every 1000 its we increase the levels of SH up to a maximum degree
+            if iteration % 1000 == 0:
+                gaussians.oneupSHdegree()
 
-        for _ in range(opt.optimizer_step_interval):
-            # Pick a Camera using the strategy
-            viewpoint_cam = selector.select_view(gaussians, iteration)
+            for _ in range(opt.optimizer_step_interval):
+                # Pick a Camera using the strategy
+                viewpoint_cam = selector.select_view(gaussians, iteration)
 
-            # Render
-            if (iteration - 1) == debug_from:
-                pipe.debug = True
+                # Render
+                if (iteration - 1) == debug_from:
+                    pipe.debug = True
 
-            bg = torch.rand((3), device="cuda") if opt.random_background else background
+                bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
-            image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+                render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
+                image = render_pkg["render"]
+                viewspace_point_tensor = render_pkg["viewspace_points"]
+                visibility_filter = render_pkg["visibility_filter"]
+                radii = render_pkg["radii"]
 
-            # Loss
-            gt_image = viewpoint_cam.original_image.cuda()
-            Ll1 = l1_loss(image, gt_image)
-            loss = Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-            loss /= opt.optimizer_step_interval  # Gradient accumulation
-            loss.backward()
+                # Loss
+                gt_image = viewpoint_cam.original_image.cuda()
+                Ll1 = l1_loss(image, gt_image)
+                loss = Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+                loss /= opt.optimizer_step_interval  # Gradient accumulation
+                loss.backward()
 
-            # Update loss-based selector with this view's loss
-            if hasattr(selector, 'update_loss'):
-                selector.update_loss(viewpoint_cam, loss.item() * opt.optimizer_step_interval)
+                # Update loss-based selector with this view's loss
+                if hasattr(selector, "update_loss"):
+                    selector.update_loss(viewpoint_cam, loss.item() * opt.optimizer_step_interval)
 
-        iter_end.record()
+            iter_end.record()
 
-        with torch.no_grad():
-            # Progress bar
-            ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
-            if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
-                progress_bar.update(10)
-            if iteration == opt.iterations:
-                progress_bar.close()
+            with torch.no_grad():
+                # Progress bar
+                ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
+                if iteration % 10 == 0:
+                    progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
 
-            # Log and save
-            # Modified to return metrics dict
-            current_metrics = training_report(logger, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
-            
-            if current_metrics:
-                metrics_history.append(current_metrics)
-                # Save history to JSON incrementally
-                with open(os.path.join(dataset.model_path, "metrics_history.json"), "w") as f:
-                    json.dump(metrics_history, f, indent=4)
+                # Log and save
+                current_metrics = training_report(
+                    logger,
+                    iteration,
+                    Ll1,
+                    loss,
+                    l1_loss,
+                    iter_start.elapsed_time(iter_end),
+                    testing_iterations,
+                    scene,
+                    render,
+                    (pipe, background),
+                )
 
-            if iteration in saving_iterations:
-                print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
+                if current_metrics:
+                    metrics_history.append(current_metrics)
+                    # Save history to JSON incrementally
+                    with open(os.path.join(dataset.model_path, "metrics_history.json"), "w") as f:
+                        json.dump(metrics_history, f, indent=4)
 
-            # Densification
-            if iteration < opt.densify_until_iter:
-                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                if iteration in saving_iterations:
+                    print("\n[ITER {}] Saving Gaussians".format(iteration))
+                    scene.save(iteration)
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, opt.prune_alpha_threshold, scene.cameras_extent, size_threshold, radii)
+                # Densification
+                if iteration < opt.densify_until_iter:
+                    gaussians.max_radii2D[visibility_filter] = torch.max(
+                        gaussians.max_radii2D[visibility_filter], radii[visibility_filter]
+                    )
+                    gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                    gaussians.reset_opacity()
+                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                        gaussians.densify_and_prune(
+                            opt.densify_grad_threshold,
+                            opt.prune_alpha_threshold,
+                            scene.cameras_extent,
+                            size_threshold,
+                            radii,
+                        )
 
-            # Optimizer step
-            if iteration < opt.iterations:
-                gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none=True)
+                    if iteration % opt.opacity_reset_interval == 0 or (
+                        dataset.white_background and iteration == opt.densify_from_iter
+                    ):
+                        gaussians.reset_opacity()
 
-            if not no_checkpoints and ((iteration in checkpoint_iterations) or iteration == opt.iterations):
-                print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                _save_checkpoint(iteration)
+                # Optimizer step
+                if iteration < opt.iterations:
+                    gaussians.optimizer.step()
+                    gaussians.optimizer.zero_grad(set_to_none=True)
 
-        # Final evaluation
-        final_results = eval_and_save(dataset.model_path, scene, render, (pipe, background))
+                if not no_checkpoints and ((iteration in checkpoint_iterations) or iteration == opt.iterations):
+                    print("\n[ITER {}] Saving Checkpoint".format(iteration))
+                    _save_checkpoint(iteration)
 
-        # Save final summary
-        with open(os.path.join(dataset.model_path, "final_results.json"), "w") as f:
-            json.dump(final_results, f, indent=4)
+            progress_bar.update(1)
+
+        if not skip_final_eval:
+            # Final evaluation
+            final_results = eval_and_save(dataset.model_path, scene, render, (pipe, background))
+
+            # Save final summary
+            with open(os.path.join(dataset.model_path, "final_results.json"), "w") as f:
+                json.dump(final_results, f, indent=4)
 
     except KeyboardInterrupt:
         if checkpoint_on_interrupt:
@@ -306,7 +330,16 @@ def training_report(logger, iteration, Ll1, loss, l1_loss, elapsed, testing_iter
     metrics_data = None
 
     # Report test and samples of training set
-    if (iteration + 1) % testing_iterations[0] == 0:
+    should_test = False
+    if isinstance(testing_iterations, int):
+        should_test = (iteration % testing_iterations) == 0
+    elif testing_iterations:
+        try:
+            should_test = iteration in set(testing_iterations)
+        except TypeError:
+            should_test = False
+
+    if should_test:
         lpips_fn = LPIPS(net_type="vgg").to("cuda")
         torch.cuda.empty_cache()
         validation_configs = (
@@ -461,12 +494,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable view-selection file logs (selection_history.jsonl, view_selection_*.log)",
     )
+    parser.add_argument("--skip_final_eval", action="store_true",
+                        help="Skip final eval_and_save() (useful for quick smoke tests / avoiding LPIPS OOM)")
 
     args = parser.parse_args(sys.argv[1:])
     if args.no_save:
-        args.save_iterations = []  # Clear all save iterations
+        # "Minimal disk" mode for training script: no gaussians snapshots, no checkpoints.
+        args.save_iterations = []
+        args.checkpoint_iterations = []
+        args.no_checkpoints = True
     else:
-        args.save_iterations.append(args.iterations)
+        if args.iterations not in args.save_iterations:
+            args.save_iterations.append(args.iterations)
 
     print("Optimizing " + args.model_path)
 
@@ -479,7 +518,7 @@ if __name__ == "__main__":
         args.start_checkpoint, args.debug_from, 
         args.view_selection_strategy, args.view_selection_config, args.seed,
         logger_backend=args.logger, wandb_project=args.wandb_project, 
-        wandb_entity=args.wandb_entity, use_gui=False,
+        wandb_entity=args.wandb_entity, use_gui=False, skip_final_eval=args.skip_final_eval,
         no_checkpoints=args.no_checkpoints,
         checkpoint_on_interrupt=args.checkpoint_on_interrupt,
         disable_view_selection_logs=args.disable_view_selection_logs,
