@@ -590,8 +590,10 @@ DEFAULT_SEEDS_TIER2 = [0, 1, 2]
 TRAINING_DEFAULTS = {
     "iterations": 30000,
     "test_iterations": [1000, 2500, 5000, 7500, 10000, 12500, 15000, 17500, 20000, 25000, 30000],
-    "save_iterations": [1000, 3000, 7000, 15000, 30000],  # Multiple checkpoints for analysis
-    "checkpoint_iterations": [7000, 15000, 30000],  # PyTorch checkpoints for resume
+    # NOTE: By default we do not save point clouds or periodic checkpoints to reduce disk usage.
+    # Final evaluation images and JSON summaries are still saved.
+    "save_iterations": [],
+    "checkpoint_iterations": [],
     "data_device": "cpu",
     "resolution": 2,  # Half resolution for speed (adjust as needed)
     "logger": "wandb",
@@ -627,6 +629,9 @@ class AblationRunner:
         wandb_entity: str = "fabian-grob-technical-university-of-munich",
         verbose: bool = True,
         skip_dino: bool = True,
+        minimal_disk: bool = True,
+        keep_wandb_local: bool = True,
+        disable_selection_logs: bool = False,
     ):
         """
         Initialize the ablation runner.
@@ -659,6 +664,9 @@ class AblationRunner:
         self.wandb_entity = wandb_entity
         self.verbose = verbose
         self.skip_dino = skip_dino
+        self.minimal_disk = minimal_disk
+        self.keep_wandb_local = keep_wandb_local
+        self.disable_selection_logs = disable_selection_logs
 
         # Load experiment configs
         self.all_configs = get_all_experiment_configs()
@@ -697,6 +705,45 @@ class AblationRunner:
             # Try alternative structure: data_root/scene_id
             scene_path = os.path.join(self.data_root, scene)
         return scene_path
+
+    @staticmethod
+    def _find_latest_checkpoint(run_dir: str) -> Optional[str]:
+        """Return the newest checkpoint path in run_dir, or None.
+
+        Prefers *_interrupt/_error checkpoints if present, otherwise falls back to
+        any chkpnt*.pth. Sorting is by (iteration, suffix priority).
+        """
+        candidates = glob.glob(os.path.join(run_dir, "chkpnt*.pth"))
+        if not candidates:
+            return None
+
+        def _score(path: str) -> tuple:
+            base = os.path.basename(path)
+            # chkpnt15000_interrupt.pth / chkpnt15000.pth
+            it = 0
+            try:
+                rest = base[len("chkpnt"):]
+                rest = rest.split(".pth")[0]
+                num = ""
+                for ch in rest:
+                    if ch.isdigit():
+                        num += ch
+                    else:
+                        break
+                it = int(num) if num else 0
+            except Exception:
+                it = 0
+
+            # Prefer interrupt/error checkpoints at same iteration
+            if "_interrupt" in base:
+                suffix_prio = 2
+            elif "_error" in base:
+                suffix_prio = 1
+            else:
+                suffix_prio = 0
+            return (it, suffix_prio)
+
+        return max(candidates, key=_score)
 
     def generate_run_configs(
         self,
@@ -759,7 +806,7 @@ class AblationRunner:
 
         return runs
 
-    def run_single_experiment(self, run_config: RunConfig) -> bool:
+    def run_single_experiment(self, run_config: RunConfig, resume: bool = True) -> bool:
         """
         Execute a single training run.
 
@@ -781,6 +828,11 @@ class AblationRunner:
         # Create output directory
         os.makedirs(run_dir, exist_ok=True)
 
+        # If resuming and a checkpoint exists, continue from it automatically
+        start_checkpoint = None
+        if resume and (not run_config.is_completed()):
+            start_checkpoint = self._find_latest_checkpoint(run_dir)
+
         # Build command
         cmd = [
             "python", "-u", "train_gsplat.py",
@@ -795,14 +847,30 @@ class AblationRunner:
             "--logger", self.logger_backend,
         ]
 
+        if start_checkpoint:
+            cmd.extend(["--start_checkpoint", start_checkpoint])
+
         # Add test iterations
         cmd.extend(["--test_iterations"] + [str(i) for i in TRAINING_DEFAULTS["test_iterations"]])
 
-        # Add save iterations
-        cmd.extend(["--save_iterations"] + [str(i) for i in TRAINING_DEFAULTS["save_iterations"]])
-
-        # Add checkpoint iterations
-        cmd.extend(["--checkpoint_iterations"] + [str(i) for i in TRAINING_DEFAULTS["checkpoint_iterations"]])
+        # Disk-minimal defaults:
+        # - Do not write point_cloud/*.ply snapshots
+        # - Do not write checkpoints on success
+        # - Still write a checkpoint on interrupt/crash for resume/debug
+        # - Do not write per-iteration view-selection logs
+        if self.minimal_disk:
+            cmd.append("--no_save")
+            cmd.append("--no_checkpoints")
+            cmd.append("--checkpoint_on_interrupt")
+            if self.disable_selection_logs:
+                cmd.append("--disable_view_selection_logs")
+        else:
+            # Add save iterations
+            if TRAINING_DEFAULTS["save_iterations"]:
+                cmd.extend(["--save_iterations"] + [str(i) for i in TRAINING_DEFAULTS["save_iterations"]])
+            # Add checkpoint iterations
+            if TRAINING_DEFAULTS["checkpoint_iterations"]:
+                cmd.extend(["--checkpoint_iterations"] + [str(i) for i in TRAINING_DEFAULTS["checkpoint_iterations"]])
 
         # Add wandb config if using wandb
         if self.logger_backend == "wandb":
@@ -819,6 +887,7 @@ class AblationRunner:
             "config": run_config.experiment.config,
             "scene": run_config.scene,
             "seed": run_config.seed,
+            "start_checkpoint": start_checkpoint,
             "started_at": datetime.now().isoformat(),
             "command": " ".join(cmd),
         }
@@ -853,6 +922,29 @@ class AblationRunner:
 
             if process.returncode != 0:
                 raise subprocess.CalledProcessError(process.returncode, cmd)
+
+            # Best-effort cleanup after successful run when minimal_disk is enabled
+            # This is defensive in case older settings produced large artifacts
+            if self.minimal_disk:
+                try:
+                    import shutil
+
+                    pc_dir = os.path.join(run_dir, "point_cloud")
+                    if os.path.isdir(pc_dir):
+                        shutil.rmtree(pc_dir, ignore_errors=True)
+
+                    for pth in glob.glob(os.path.join(run_dir, "chkpnt*.pth")):
+                        try:
+                            os.remove(pth)
+                        except OSError:
+                            pass
+
+                    if not self.keep_wandb_local:
+                        wb_dir = os.path.join(run_dir, "wandb")
+                        if os.path.isdir(wb_dir):
+                            shutil.rmtree(wb_dir, ignore_errors=True)
+                except Exception as cleanup_err:
+                    self.logger.warning(f"Cleanup skipped/failed for {run_id}: {cleanup_err}")
 
             self.logger.info(f"Completed: {run_id} in {elapsed/60:.1f} minutes")
             return True
@@ -892,9 +984,9 @@ class AblationRunner:
         # Generate all run configurations
         all_runs = self.generate_run_configs(tier=tier, config_ids=config_ids)
 
-        self.logger.info(f"=" * 70)
-        self.logger.info(f"ABLATION STUDY")
-        self.logger.info(f"=" * 70)
+        self.logger.info("=" * 70)
+        self.logger.info("ABLATION STUDY")
+        self.logger.info("=" * 70)
         self.logger.info(f"Total runs to process: {len(all_runs)}")
         self.logger.info(f"Output directory: {self.output_root}")
         self.logger.info(f"Data root: {self.data_root}")
@@ -903,7 +995,7 @@ class AblationRunner:
             self.logger.info(f"Tier filter: {tier}")
         if config_ids:
             self.logger.info(f"Config filter: {config_ids}")
-        self.logger.info(f"=" * 70)
+        self.logger.info("=" * 70)
 
         # Filter out completed runs if resuming
         pending_runs = []
@@ -922,7 +1014,7 @@ class AblationRunner:
         self.logger.info(f"Pending runs: {len(pending_runs)}")
 
         if dry_run:
-            self.logger.info(f"\n[DRY RUN] Would execute the following runs:")
+            self.logger.info("\n[DRY RUN] Would execute the following runs:")
             for i, run in enumerate(pending_runs, 1):
                 self.logger.info(f"  {i:3d}. {run.run_id}")
                 self.logger.info(f"       Strategy: {run.experiment.strategy}")
@@ -942,7 +1034,7 @@ class AblationRunner:
             self.logger.info(f"{'='*70}")
 
             try:
-                success = self.run_single_experiment(run)
+                success = self.run_single_experiment(run, resume=resume)
 
                 if success:
                     successful += 1
@@ -960,7 +1052,7 @@ class AblationRunner:
 
         # Summary
         self.logger.info(f"\n{'='*70}")
-        self.logger.info(f"ABLATION SUMMARY")
+        self.logger.info("ABLATION SUMMARY")
         self.logger.info(f"{'='*70}")
         self.logger.info(f"Total runs: {len(all_runs)}")
         self.logger.info(f"Completed (this session): {successful}")
@@ -1019,7 +1111,7 @@ class AblationRunner:
         tier1_runs = tier1_configs * len(self.scenes_tier1) * len(self.seeds_tier1)
         tier2_runs = tier2_configs * len(self.scenes_tier2) * len(self.seeds_tier2)
 
-        print(f"\nRUN COUNTS:")
+        print("\nRUN COUNTS:")
         print(f"  Tier 1: {tier1_configs} configs × {len(self.scenes_tier1)} scenes × {len(self.seeds_tier1)} seeds = {tier1_runs} runs")
         print(f"  Tier 2: {tier2_configs} configs × {len(self.scenes_tier2)} scenes × {len(self.seeds_tier2)} seeds = {tier2_runs} runs")
         print(f"  Total: {tier1_runs + tier2_runs} runs")
@@ -1104,6 +1196,23 @@ Examples:
         "--include_dino",
         action="store_true",
         help="Include DINO experiments (requires DINOSelector to be implemented)"
+    )
+
+    parser.add_argument(
+        "--full_disk",
+        action="store_true",
+        help="Disable minimal-disk mode (save point clouds, checkpoints, and selection logs as configured)",
+    )
+    parser.add_argument(
+        "--delete_wandb_local",
+        action="store_true",
+        help="After successful runs, delete local 'wandb/' artifacts inside each run directory",
+    )
+
+    parser.add_argument(
+        "--disable_selection_logs",
+        action="store_true",
+        help="Disable view-selection logs (selection_history.jsonl and view_selection_*.log)",
     )
 
     # Logging options
@@ -1197,6 +1306,9 @@ def main():
         wandb_entity=args.wandb_entity,
         verbose=not args.quiet,
         skip_dino=not args.include_dino,
+        minimal_disk=not args.full_disk,
+        keep_wandb_local=not args.delete_wandb_local,
+        disable_selection_logs=args.disable_selection_logs,
     )
 
     # Print experiment summary

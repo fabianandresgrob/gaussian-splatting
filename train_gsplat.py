@@ -1,16 +1,14 @@
 import os
 import torch
-from random import randint
 from utils.loss_utils import l1_loss, ssim
 from lpipsPyTorch import LPIPS
 from gaussian_renderer import render
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
-import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
-from argparse import ArgumentParser, Namespace
+from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from PIL import Image
 import numpy as np
@@ -102,7 +100,26 @@ class Logger:
         if self.wandb_run:
             wandb.finish()
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, view_selection_strategy, view_selection_config, seed, logger_backend="tensorboard", wandb_project="3dgs-view-selection", wandb_entity=None, use_gui=False):
+def training(
+    dataset,
+    opt,
+    pipe,
+    testing_iterations,
+    saving_iterations,
+    checkpoint_iterations,
+    checkpoint,
+    debug_from,
+    view_selection_strategy,
+    view_selection_config,
+    seed,
+    logger_backend="tensorboard",
+    wandb_project="3dgs-view-selection",
+    wandb_entity=None,
+    use_gui=False,
+    no_checkpoints: bool = False,
+    checkpoint_on_interrupt: bool = False,
+    disable_view_selection_logs: bool = False,
+):
     print(f"positions: init={opt.position_lr_init} final={opt.position_lr_final} delay_mult={opt.position_lr_delay_mult} max_steps={opt.position_lr_max_steps}")
     print(f"feature={opt.feature_lr} opacity={opt.opacity_lr} scaling={opt.scaling_lr} rotation={opt.rotation_lr}")
     print(f"densification: interval={opt.densification_interval} from={opt.densify_from_iter} until={opt.densify_until_iter} grad_threshold={opt.densify_grad_threshold}")
@@ -142,17 +159,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     strategy = view_selection_strategy
     try:
         config = json.loads(view_selection_config)
-    except:
+    except Exception:
         config = {}
 
-    # Provide dataset root to selectors for robust path resolution (e.g., DINO embeddings).
+    # Provide dataset root to selectors for robust path resolution (e.g., DINO embeddings)
     if isinstance(config, dict) and getattr(dataset, "source_path", None):
         config.setdefault("source_path", dataset.source_path)
 
     # Configure logging for view selection module
-    configure_logging(log_dir=dataset.model_path, level="INFO", use_tqdm_handler=True)
-    
-    selector = build_selector(strategy, config=config, log_dir=dataset.model_path, seed=seed)
+    # When running large ablations, writing per-iteration selection logs can be unnecessary
+    selection_log_dir = None if disable_view_selection_logs else dataset.model_path
+    configure_logging(log_dir=selection_log_dir, level="INFO", use_tqdm_handler=True)
+
+    selector = build_selector(strategy, config=config, log_dir=selection_log_dir, seed=seed)
     selector.initialize(scene.getTrainCameras())
 
     ema_loss_for_log = 0.0
@@ -161,9 +180,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # List to store metrics for retrospective analysis
     metrics_history = []
 
-    first_iter += 1
-    for iteration in range(first_iter, opt.iterations + 1):
-        iter_start.record()
+    def _save_checkpoint(iteration: int, suffix: str = "") -> None:
+        filename = f"chkpnt{iteration}{suffix}.pth"
+        path = os.path.join(scene.model_path, filename)
+        torch.save((gaussians.capture(), iteration), path)
+
+    last_completed_iteration = first_iter
+
+    try:
+        first_iter += 1
+        for iteration in range(first_iter, opt.iterations + 1):
+            last_completed_iteration = iteration
+            iter_start.record()
 
         gaussians.update_learning_rate(iteration)
 
@@ -237,19 +265,36 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none=True)
 
-            if (iteration in checkpoint_iterations) or iteration == opt.iterations:
+            if not no_checkpoints and ((iteration in checkpoint_iterations) or iteration == opt.iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-    
-    # Final evaluation
-    final_results = eval_and_save(dataset.model_path, scene, render, (pipe, background))
-    
-    # Save final summary
-    with open(os.path.join(dataset.model_path, "final_results.json"), "w") as f:
-        json.dump(final_results, f, indent=4)
-    
-    # Close logger
-    logger.finish()
+                _save_checkpoint(iteration)
+
+        # Final evaluation
+        final_results = eval_and_save(dataset.model_path, scene, render, (pipe, background))
+
+        # Save final summary
+        with open(os.path.join(dataset.model_path, "final_results.json"), "w") as f:
+            json.dump(final_results, f, indent=4)
+
+    except KeyboardInterrupt:
+        if checkpoint_on_interrupt:
+            try:
+                print(f"\n[INTERRUPT] Saving checkpoint at iter {last_completed_iteration}")
+                _save_checkpoint(last_completed_iteration, suffix="_interrupt")
+            except Exception as e:
+                print(f"[INTERRUPT] Failed to save checkpoint: {e}")
+        raise
+    except Exception:
+        if checkpoint_on_interrupt:
+            try:
+                print(f"\n[ERROR] Saving checkpoint at iter {last_completed_iteration}")
+                _save_checkpoint(last_completed_iteration, suffix="_error")
+            except Exception as e:
+                print(f"[ERROR] Failed to save checkpoint: {e}")
+        raise
+    finally:
+        # Close logger even on error/interrupt
+        logger.finish()
 
 
 def training_report(logger, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene: Scene, renderFunc, renderArgs):
@@ -401,6 +446,21 @@ if __name__ == "__main__":
                         help="W&B team/organization name (only used if --logger=wandb). None = personal account")
     parser.add_argument("--no_save", action="store_true",
                         help="Skip saving model checkpoints entirely (useful for hyperparameter sweeps)")
+    parser.add_argument(
+        "--no_checkpoints",
+        action="store_true",
+        help="Do not save any .pth checkpoints during training or at the end",
+    )
+    parser.add_argument(
+        "--checkpoint_on_interrupt",
+        action="store_true",
+        help="If interrupted (SIGINT) or crashes, save a checkpoint at the last completed iteration",
+    )
+    parser.add_argument(
+        "--disable_view_selection_logs",
+        action="store_true",
+        help="Disable view-selection file logs (selection_history.jsonl, view_selection_*.log)",
+    )
 
     args = parser.parse_args(sys.argv[1:])
     if args.no_save:
@@ -419,7 +479,10 @@ if __name__ == "__main__":
         args.start_checkpoint, args.debug_from, 
         args.view_selection_strategy, args.view_selection_config, args.seed,
         logger_backend=args.logger, wandb_project=args.wandb_project, 
-        wandb_entity=args.wandb_entity, use_gui=False
+        wandb_entity=args.wandb_entity, use_gui=False,
+        no_checkpoints=args.no_checkpoints,
+        checkpoint_on_interrupt=args.checkpoint_on_interrupt,
+        disable_view_selection_logs=args.disable_view_selection_logs,
     )
 
     print("\nTraining complete.")
