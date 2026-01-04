@@ -147,8 +147,13 @@ def training(
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     if checkpoint:
-        (model_params, first_iter) = torch.load(checkpoint)
-        gaussians.restore(model_params, opt)
+        try:
+            (model_params, first_iter) = torch.load(checkpoint)
+            gaussians.restore(model_params, opt)
+            print(f"[Checkpoint] Resumed from {checkpoint} at iter {first_iter}")
+        except Exception as e:
+            print(f"[Checkpoint] Failed to load '{checkpoint}', starting from scratch: {e}")
+            first_iter = 0
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -499,7 +504,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
     if args.no_save:
-        # "Minimal disk" mode for training script: no gaussians snapshots, no checkpoints.
+        # "Minimal disk" mode for training script: no gaussians snapshots, no checkpoints
         args.save_iterations = []
         args.checkpoint_iterations = []
         args.no_checkpoints = True
