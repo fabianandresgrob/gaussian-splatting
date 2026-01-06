@@ -26,7 +26,7 @@ class GeometricDiversitySelector(ViewSelector):
 
     def __init__(self, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None):
         """
-        Initialize the fixed probability selector.
+        Initialize the geometric diversity selector.
 
         Args:
             config: Configuration dictionary with optional keys:
@@ -42,7 +42,7 @@ class GeometricDiversitySelector(ViewSelector):
         self.temperature = self.config.get('temperature', 1.0)
         self.distance_weight = self.config.get('distance_weight', 0.5)
         self.diversity_weight = self.config.get('diversity_weight', 0.5)
-        self.fixed_probabilities = None
+        self.selection_probabilities = None
 
     def initialize(self, all_cameras: List) -> None:
         """
@@ -105,7 +105,7 @@ class GeometricDiversitySelector(ViewSelector):
         probabilities = softmax(combined_scores / self.temperature)
 
         # Store as dictionary
-        self.fixed_probabilities = {
+        self.selection_probabilities = {
             cam.uid: float(probabilities[i])
             for i, cam in enumerate(all_cameras)
         }
@@ -126,4 +126,4 @@ class GeometricDiversitySelector(ViewSelector):
         Returns:
             Dictionary mapping camera uid to probability
         """
-        return self.fixed_probabilities
+        return self.selection_probabilities

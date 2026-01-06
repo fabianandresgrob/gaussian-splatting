@@ -172,7 +172,7 @@ class ScheduledHybridSelector(ViewSelector):
                 name,
                 config=sub_config,
                 log_dir=None,  # Don't duplicate logging
-                verbose=False,  # Avoid cluttered output
+                verbose=self.verbose,
                 seed=seed
             )
             self.sub_selectors.append(selector)

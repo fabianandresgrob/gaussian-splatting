@@ -1,24 +1,18 @@
-"""
-View selection module for intelligent camera sampling in 3D Gaussian Splatting.
+"""View selection module for intelligent camera sampling in 3D Gaussian Splatting.
 
 This module provides different strategies for selecting which camera viewpoint
-to render from during training, replacing naive random selection with more
+to render from during training, replacing naive uniform sampling with more
 sophisticated approaches.
 
 Available strategies (matching slides terminology):
 - StackBasedSelector: Stack-based shuffle (default 3DGS baseline) - guaranteed uniform coverage
-- UniformRandomSelector: True random with replacement (baseline for probability methods)
+- UniformRandomSelector: True uniform random with replacement
 - GeometricDiversitySelector: Pose-based heuristics for geometric diversity
 - ClusteringSelector: Cluster-based selection for spatial coverage
 - LossBasedSelector: Loss-driven selection prioritizing harder views
 - GaussianAwareSelector: Adaptive selection based on Gaussian visibility
 - ScheduledHybridSelector: Combines multiple selectors with time-dependent weights
 - VGGTSelector: VGGT-guided selection (optional advanced method)
-
-Legacy aliases maintained for backward compatibility:
-- RandomSelector -> UniformRandomSelector
-- FixedProbabilitySelector -> GeometricDiversitySelector
-- WithoutReplacementSelector -> StackBasedSelector
 """
 
 from .selector import ViewSelector
@@ -42,12 +36,6 @@ try:
 except Exception:  # pragma: no cover
     VGGTSelector = None
 
-# Legacy aliases for backward compatibility
-RandomSelector = UniformRandomSelector
-FixedProbabilitySelector = GeometricDiversitySelector
-WithoutReplacementSelector = StackBasedSelector
-
-
 # Registry mapping strategy names to classes
 SELECTOR_REGISTRY = {
     # New names (matching slides)
@@ -58,10 +46,6 @@ SELECTOR_REGISTRY = {
     'loss_based': LossBasedSelector,
     'gaussian_aware': GaussianAwareSelector,
     'scheduled_hybrid': ScheduledHybridSelector,
-    # Legacy aliases for backward compatibility
-    'random': UniformRandomSelector,
-    'fixed_prob': GeometricDiversitySelector,
-    'no_replace': StackBasedSelector,
 }
 
 if DINOSelector is not None:
@@ -86,12 +70,7 @@ def build_selector(selector_type: str, config: dict = None, log_dir: str = None,
             - 'gaussian_aware': Adaptive selection based on Gaussian visibility
             - 'scheduled_hybrid': Combines multiple selectors
             - 'vggt': VGGT-guided selection
-            
-            Legacy names (still supported):
-            - 'random': Alias for 'uniform_random'
-            - 'fixed_prob': Alias for 'geometric'
-            - 'no_replace': Alias for 'stack'
-            
+
         config: Configuration dictionary for the selector (strategy-specific)
         log_dir: Directory to save selection logs
         verbose: If True, print detailed information
@@ -147,10 +126,6 @@ __all__ = [
     'LossBasedSelector',
     'GaussianAwareSelector',
     'ScheduledHybridSelector',
-    # Legacy aliases
-    'RandomSelector',
-    'FixedProbabilitySelector',
-    'WithoutReplacementSelector',
     # Utilities
     'build_selector',
     'list_selectors',

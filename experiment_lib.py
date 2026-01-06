@@ -25,7 +25,6 @@ def run_training(repo_path, data_path, output_dir, strategy, seed, exp_name,
             - 'geometric': Geometric diversity from poses
             - 'clustering': Cluster-based selection
             - 'loss_based': Loss-driven selection
-            Legacy aliases: 'random', 'fixed_prob', 'no_replace'
         seed: Random seed for reproducibility
         exp_name: Experiment name (used for output folder)
         iterations: Total training iterations (default: 30000)

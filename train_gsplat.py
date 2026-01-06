@@ -119,6 +119,7 @@ def training(
     no_checkpoints: bool = False,
     checkpoint_on_interrupt: bool = False,
     disable_view_selection_logs: bool = False,
+    view_selection_verbose: bool = True,
     skip_final_eval: bool = False,
 ):
     print(f"positions: init={opt.position_lr_init} final={opt.position_lr_final} delay_mult={opt.position_lr_delay_mult} max_steps={opt.position_lr_max_steps}")
@@ -175,9 +176,19 @@ def training(
     # Configure logging for view selection module
     # When running large ablations, writing per-iteration selection logs can be unnecessary
     selection_log_dir = None if disable_view_selection_logs else dataset.model_path
-    configure_logging(log_dir=selection_log_dir, level="INFO", use_tqdm_handler=True)
+    configure_logging(
+        log_dir=selection_log_dir,
+        level="DEBUG" if view_selection_verbose else "INFO",
+        use_tqdm_handler=True,
+    )
 
-    selector = build_selector(strategy, config=config, log_dir=selection_log_dir, seed=seed)
+    selector = build_selector(
+        strategy,
+        config=config,
+        log_dir=selection_log_dir,
+        verbose=view_selection_verbose,
+        seed=seed,
+    )
     selector.initialize(scene.getTrainCameras())
 
     ema_loss_for_log = 0.0
@@ -468,12 +479,34 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default=None)
-    parser.add_argument("--view_selection_strategy", type=str, default="stack", 
-                        choices=["stack", "uniform_random", "geometric", "clustering", "loss_based", 
-                                 "gaussian_aware", "scheduled_hybrid", "dino",
-                                 # Legacy aliases
-                                 "random", "fixed_prob", "no_replace"])
+    parser.add_argument(
+        "--view_selection_strategy",
+        type=str,
+        default="stack",
+        choices=[
+            "stack",
+            "uniform_random",
+            "geometric",
+            "clustering",
+            "loss_based",
+            "gaussian_aware",
+            "scheduled_hybrid",
+            "dino",
+        ],
+    )
     parser.add_argument("--view_selection_config", type=str, default="{}")
+    parser.add_argument(
+        "--view_selection_verbose",
+        action="store_true",
+        default=True,
+        help="Enable verbose logging inside view selectors (default: enabled)",
+    )
+    parser.add_argument(
+        "--no_view_selection_verbose",
+        action="store_false",
+        dest="view_selection_verbose",
+        help="Disable verbose logging inside view selectors",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--logger", type=str, default="tensorboard",
                         choices=["tensorboard", "wandb", "none"],
@@ -527,6 +560,7 @@ if __name__ == "__main__":
         no_checkpoints=args.no_checkpoints,
         checkpoint_on_interrupt=args.checkpoint_on_interrupt,
         disable_view_selection_logs=args.disable_view_selection_logs,
+        view_selection_verbose=args.view_selection_verbose,
     )
 
     print("\nTraining complete.")

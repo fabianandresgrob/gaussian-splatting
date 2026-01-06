@@ -30,9 +30,9 @@ These are the primary experiments for the paper's main results table.
 
   ID   | Strategy          | Description
   -----|-------------------|--------------------------------------------------
-  B1   | no_replace        | Baseline: epoch-based shuffle (original 3DGS)
-  B2   | random            | Baseline: true uniform random sampling
-  S1   | fixed_prob        | Standalone: geometric heuristics (pose diversity)
+    B1   | stack             | Baseline: epoch-based shuffle (original 3DGS)
+    B2   | uniform_random    | Baseline: true uniform random sampling
+    S1   | geometric         | Standalone: geometric heuristics (pose diversity)
   S2   | loss_based        | Standalone: loss-weighted sampling (hard mining)
   S3   | dino              | Standalone: DINO feature diversity [PLACEHOLDER]
   C1   | hybrid_geo_loss   | Combined: Geo→Loss schedule (explore→exploit)
@@ -241,7 +241,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
     configs["B1"] = ExperimentConfig(
         id="B1",
         name="Baseline: No Replacement",
-        strategy="no_replace",
+        strategy="stack",
         config={},
         tier=Tier.CORE,
         description="Original 3DGS epoch-based shuffle (stack-based selection)"
@@ -250,7 +250,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
     configs["B2"] = ExperimentConfig(
         id="B2",
         name="Baseline: True Random",
-        strategy="random",
+        strategy="uniform_random",
         config={},
         tier=Tier.CORE,
         description="Uniform random sampling with replacement"
@@ -261,9 +261,9 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
     configs["S1"] = ExperimentConfig(
         id="S1",
         name="Standalone: Geometric",
-        strategy="fixed_prob",
+        strategy="geometric",
         config={
-            "temperature": 1.0,
+            "temperature": 0.3,
             "distance_weight": 0.5,
             "diversity_weight": 0.5
         },
@@ -276,26 +276,24 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Standalone: Loss-Based",
         strategy="loss_based",
         config={
-            "ema_decay": 0.99,
-            "temperature": 1.0,
-            "min_samples_before_bias": 5
+            "ema_decay": 0.92,
+            "temperature": 0.3,
+            "min_samples_before_bias": 0
         },
         tier=Tier.CORE,
         description="EMA loss tracking, prioritize high-loss views"
     )
 
-    # PLACEHOLDER: DINO-based selection
-    # TODO: Implement DINOSelector in view_selection/dino_selector.py
     configs["S3"] = ExperimentConfig(
         id="S3",
         name="Standalone: DINO Features",
-        strategy="dino",  # PLACEHOLDER - not yet implemented
+        strategy="dino",
         config={
             "model": "dinov2_vitb14",
             "embeddings_path": "auto",
             "require_embeddings": True,
-            "temperature": 1.0,
-            "diversity_weight": 1.0
+            "temperature": 0.3,
+            "diversity_mode": "distance_to_selected"
         },
         tier=Tier.CORE,
         description="[PLACEHOLDER] DINO feature-based diversity sampling",
@@ -310,14 +308,14 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Combined: Geo→Loss Schedule",
         strategy="scheduled_hybrid",
         config={
-            "selectors": ["fixed_prob", "loss_based"],
+            "selectors": ["geometric", "loss_based"],
             "schedule_type": "linear",
             "weights_start": [0.8, 0.2],
             "weights_end": [0.2, 0.8],
             "max_iterations": 30000,
             "temperature": 1.0,
             # Sub-selector configs
-            "fixed_prob_config": {
+            "geometric_config": {
                 "temperature": 1.0,
                 "distance_weight": 0.5,
                 "diversity_weight": 0.5
@@ -339,7 +337,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Combined: All Three Phased",
         strategy="scheduled_hybrid",
         config={
-            "selectors": ["fixed_prob", "loss_based", "dino"],  # PLACEHOLDER
+            "selectors": ["geometric", "loss_based", "dino"],  # PLACEHOLDER
             "schedule_type": "step",
             "milestones": [
                 [0,     [0.4, 0.1, 0.5]],   # Phase 1: Geo+DINO (diversity)
@@ -347,7 +345,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
                 [20000, [0.2, 0.6, 0.2]],   # Phase 3: Loss-focused
             ],
             "temperature": 1.0,
-            "fixed_prob_config": {
+            "geometric_config": {
                 "temperature": 1.0,
                 "distance_weight": 0.5,
                 "diversity_weight": 0.5
@@ -375,14 +373,15 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Clustering: K-Means",
         strategy="clustering",
         config={
-            "clustering_method": "kmeans",
+            "clustering_method": "dbscan",
             "n_clusters": 10,
             "temperature": 1.0,
             "use_orientation": True,
-            "update_frequency": 100
+            "update_frequency": 100,
+            "eps": 0.5,
         },
         tier=Tier.CORE,
-        description="K-means clustering on camera poses, inverse cluster-size weighting"
+        description="DBSCAN clustering on camera poses, inverse cluster-size weighting"
     )
 
     # ========================================================================
@@ -501,12 +500,12 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Hybrid: Static 50/50",
         strategy="scheduled_hybrid",
         config={
-            "selectors": ["fixed_prob", "loss_based"],
+            "selectors": ["geometric", "loss_based"],
             "schedule_type": "linear",
             "weights_start": [0.5, 0.5],
             "weights_end": [0.5, 0.5],  # Constant weights
             "max_iterations": 30000,
-            "fixed_prob_config": {"temperature": 1.0},
+            "geometric_config": {"temperature": 1.0},
             "loss_based_config": {"ema_decay": 0.99, "temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
@@ -518,12 +517,12 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Hybrid: Cosine Schedule",
         strategy="scheduled_hybrid",
         config={
-            "selectors": ["fixed_prob", "loss_based"],
+            "selectors": ["geometric", "loss_based"],
             "schedule_type": "cosine",  # Smooth cosine annealing
             "weights_start": [0.8, 0.2],
             "weights_end": [0.2, 0.8],
             "max_iterations": 30000,
-            "fixed_prob_config": {"temperature": 1.0},
+            "geometric_config": {"temperature": 1.0},
             "loss_based_config": {"ema_decay": 0.99, "temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
@@ -535,12 +534,12 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Hybrid: Geo-Heavy Start",
         strategy="scheduled_hybrid",
         config={
-            "selectors": ["fixed_prob", "loss_based"],
+            "selectors": ["geometric", "loss_based"],
             "schedule_type": "linear",
             "weights_start": [0.7, 0.3],
             "weights_end": [0.3, 0.7],
             "max_iterations": 30000,
-            "fixed_prob_config": {"temperature": 1.0},
+            "geometric_config": {"temperature": 1.0},
             "loss_based_config": {"ema_decay": 0.99, "temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
@@ -632,6 +631,7 @@ class AblationRunner:
         minimal_disk: bool = True,
         keep_wandb_local: bool = True,
         disable_selection_logs: bool = False,
+        view_selection_verbose: bool = True,
         training_params: Optional[Dict[str, Any]] = None,
         no_save: bool = False,
         skip_final_eval: bool = False,
@@ -670,6 +670,7 @@ class AblationRunner:
         self.minimal_disk = minimal_disk
         self.keep_wandb_local = keep_wandb_local
         self.disable_selection_logs = disable_selection_logs
+        self.view_selection_verbose = view_selection_verbose
 
         self.training_params = TRAINING_DEFAULTS.copy()
         if training_params:
@@ -856,6 +857,9 @@ class AblationRunner:
             "--logger", self.logger_backend,
         ]
 
+        if not self.view_selection_verbose:
+            cmd.append("--no_view_selection_verbose")
+
         if start_checkpoint:
             cmd.extend(["--start_checkpoint", start_checkpoint])
 
@@ -912,6 +916,7 @@ class AblationRunner:
             "start_checkpoint": start_checkpoint,
             "started_at": datetime.now().isoformat(),
             "command": " ".join(cmd),
+            "view_selection_verbose": self.view_selection_verbose,
         }
         with open(os.path.join(run_dir, "run_metadata.json"), 'w') as f:
             json.dump(metadata, f, indent=2)
@@ -1278,6 +1283,19 @@ Examples:
         help="Reduce output verbosity"
     )
 
+    parser.add_argument(
+        "--view_selection_verbose",
+        action="store_true",
+        default=True,
+        help="Enable verbose logging inside view selectors (default: enabled)",
+    )
+    parser.add_argument(
+        "--no_view_selection_verbose",
+        action="store_false",
+        dest="view_selection_verbose",
+        help="Disable verbose logging inside view selectors",
+    )
+
     # Training overrides (useful for smoke tests)
     parser.add_argument(
         "--iterations",
@@ -1382,6 +1400,7 @@ def main():
         minimal_disk=not args.full_disk,
         keep_wandb_local=not args.delete_wandb_local,
         disable_selection_logs=args.disable_selection_logs,
+        view_selection_verbose=args.view_selection_verbose,
         training_params={
             "iterations": args.iterations,
             "resolution": args.resolution,

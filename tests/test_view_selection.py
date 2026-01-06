@@ -312,7 +312,7 @@ def test_dbscan_noise_handling(mock_cameras_diverse, mock_gaussians):
 # Test 8: Selection statistics tracking
 def test_selection_statistics(mock_cameras_simple, mock_gaussians):
     """Test that selectors correctly track selection statistics."""
-    selector = build_selector('random', seed=42)
+    selector = build_selector('uniform_random', seed=42)
     selector.initialize(mock_cameras_simple)
 
     # Make some selections
@@ -536,7 +536,7 @@ def test_scheduled_hybrid_presets(mock_cameras_simple, mock_gaussians):
 def test_scheduled_hybrid_forwards_updates(mock_cameras_simple, mock_gaussians):
     """Test that ScheduledHybridSelector forwards updates to sub-selectors."""
     config = {
-        'selectors': ['random', 'loss_based'],
+        'selectors': ['uniform_random', 'loss_based'],
         'weights_start': [0.5, 0.5],
         'weights_end': [0.5, 0.5],
         'schedule_type': 'linear',
