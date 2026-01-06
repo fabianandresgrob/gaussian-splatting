@@ -146,6 +146,118 @@ def training(
     
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
+
+    # ---------------------------------------------------------------------
+    # Train/Test split logging
+    # ---------------------------------------------------------------------
+    def _safe_pct(n: int, d: int) -> float:
+        return float(n) / float(d) if d > 0 else 0.0
+
+    def _infer_dataset_type(source_path: str) -> str:
+        if os.path.isdir(os.path.join(source_path, "sparse")):
+            return "colmap"
+        if os.path.exists(os.path.join(source_path, "nerfstudio", "transforms_undistorted.json")) or os.path.exists(
+            os.path.join(source_path, "nerfstudio", "transforms.json")
+        ):
+            return "scannetpp"
+        if os.path.exists(os.path.join(source_path, "transforms_train.json")):
+            return "blender"
+        return "unknown"
+
+    def _infer_scannetpp_split_method(source_path: str) -> str:
+        transforms_path = os.path.join(source_path, "nerfstudio", "transforms_undistorted.json")
+        if not os.path.exists(transforms_path):
+            transforms_path = os.path.join(source_path, "nerfstudio", "transforms.json")
+
+        try:
+            with open(transforms_path, "r") as f:
+                transforms = json.load(f)
+        except Exception:
+            return "unknown"
+
+        test_frames = transforms.get("test_frames", None)
+        if not test_frames:
+            return "fallback_seeded"
+
+        # Check whether test_frames contain any valid entries after filtering.
+        images_dir = os.path.join(source_path, "resized_undistorted_images")
+        extrinsics_path = os.path.join(source_path, "colmap", "images.txt")
+        try:
+            from scene.colmap_loader import read_extrinsics_text
+
+            extr = read_extrinsics_text(extrinsics_path)
+            names = set()
+            for _, image in extr.items():
+                fn = os.path.basename(image.name)
+                names.add(fn)
+                names.add(fn.lower())
+        except Exception:
+            names = set()
+
+        def _valid_frame(fr: dict) -> bool:
+            fp = fr.get("file_path", "")
+            if not fp:
+                return False
+            if not os.path.exists(os.path.join(images_dir, fp)):
+                return False
+            if names:
+                return (fp in names) or (fp.lower() in names)
+            return True
+
+        valid_cnt = sum(1 for fr in test_frames if _valid_frame(fr))
+        return "nerfstudio_test_frames" if valid_cnt > 0 else "fallback_seeded"
+
+    try:
+        train_cams = scene.getTrainCameras()
+        test_cams = scene.getTestCameras()
+        n_train = len(train_cams)
+        n_test = len(test_cams)
+        n_total = n_train + n_test
+
+        dataset_type = _infer_dataset_type(dataset.source_path)
+        split_method = "unknown"
+        split_params = {}
+
+        if dataset_type == "colmap":
+            if getattr(dataset, "eval", False):
+                llffhold = 8
+                split_method = "llff_hold"
+                split_params = {"llffhold": llffhold}
+            else:
+                split_method = "none"
+        elif dataset_type == "scannetpp":
+            split_method = _infer_scannetpp_split_method(dataset.source_path)
+            if split_method == "fallback_seeded":
+                split_params = {"seed": 0, "max_test": 10}
+        elif dataset_type == "blender":
+            split_method = "transforms_json"
+
+        split_summary = {
+            "source_path": dataset.source_path,
+            "dataset_type": dataset_type,
+            "eval": bool(getattr(dataset, "eval", False)),
+            "train_test_exp": bool(getattr(dataset, "train_test_exp", False)),
+            "num_total": n_total,
+            "num_train": n_train,
+            "num_test": n_test,
+            "pct_test": _safe_pct(n_test, n_total),
+            "split_method": split_method,
+            "split_params": split_params,
+            "test_image_names": sorted([c.image_name for c in test_cams]),
+        }
+
+        out_path = os.path.join(dataset.model_path, "split_summary.json")
+        with open(out_path, "w") as f:
+            json.dump(split_summary, f, indent=2)
+
+        print(
+            f"[Split] dataset={dataset_type} method={split_method} "
+            f"train={n_train} test={n_test} total={n_total} pct_test={split_summary['pct_test']:.4f} "
+            f"(logged to {out_path})"
+        )
+    except Exception as e:
+        print(f"[Split] Warning: failed to write split summary: {e}")
+
     gaussians.training_setup(opt)
     if checkpoint:
         try:

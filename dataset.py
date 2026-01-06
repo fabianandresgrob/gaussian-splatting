@@ -16,6 +16,11 @@ from PIL import Image
 
 MAX_NUM_IMAGES_PER_SCENE = 2048
 
+# Fixed seed for any automatically-created train/test split.
+# This ensures reproducibility across machines/runs when the dataset does not
+# provide an explicit test set.
+SPLIT_SEED = 0
+
 
 def readScannetppInfo(rootdir):
     train_cam_infos = []
@@ -76,16 +81,21 @@ def readScannetppInfo(rootdir):
     # If no valid test frames remain, create a small test split from training frames.
     # This is required because train_gsplat.py's final evaluation asserts at least 1 test camera.
     if not test_frames or len(test_frames) == 0:
-        # Subsample up to 10 test frames from the (filtered) training frames.
+        # Deterministically sample up to 10 test frames from the (filtered) training frames.
+        # We use a fixed seed so this split is reproducible.
         n_test = min(10, len(frames))
         if n_test == 0:
             raise FileNotFoundError(
                 f"No valid frames found for scene at {rootdir}. "
                 f"Expected images under {images_dir} and COLMAP extrinsics under {camera_extrinsic_path}."
             )
-        sample_indices = np.linspace(0, len(frames) - 1, n_test, dtype=np.int32)
+
+        rng = np.random.default_rng(SPLIT_SEED)
+        sample_indices = rng.choice(len(frames), size=n_test, replace=False)
+        sample_indices = sorted(sample_indices.tolist())
         test_frames = [frames[idx] for idx in sample_indices]
-        frames = [frame for idx, frame in enumerate(frames) if idx not in set(sample_indices.tolist())]
+        selected = set(sample_indices)
+        frames = [frame for idx, frame in enumerate(frames) if idx not in selected]
 
     num_train_frames = len(frames)
     

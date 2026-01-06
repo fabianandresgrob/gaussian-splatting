@@ -28,16 +28,16 @@ TIER 1: CORE ABLATIONS (10 scenes x 5 seeds = 50 runs per config)
 -----------------------------------------------------------------
 These are the primary experiments for the paper's main results table.
 
-  ID   | Strategy          | Description
-  -----|-------------------|--------------------------------------------------
+    ID   | Strategy          | Description
+    -----|-------------------|--------------------------------------------------
     B1   | stack             | Baseline: epoch-based shuffle (original 3DGS)
     B2   | uniform_random    | Baseline: true uniform random sampling
     S1   | geometric         | Standalone: geometric heuristics (pose diversity)
-  S2   | loss_based        | Standalone: loss-weighted sampling (hard mining)
-  S3   | dino              | Standalone: DINO feature diversity [PLACEHOLDER]
-  C1   | hybrid_geo_loss   | Combined: Geo→Loss schedule (explore→exploit)
-  C2   | hybrid_all_three  | Combined: Geo+Loss+DINO phased schedule [PLACEHOLDER]
-  CL   | clustering        | Clustering: K-means pose clustering
+    S2   | loss_based        | Standalone: loss-weighted sampling (hard mining)
+    S3   | dino              | Standalone: DINO feature diversity
+    C1   | hybrid_geo_loss   | Combined: Geo→Loss schedule (explore→exploit)
+    C2   | hybrid_all_three  | Combined: Geo+Loss+DINO phased schedule
+    CL   | clustering        | Clustering: K-means pose clustering
 
   Total Tier 1: 8 configs × 50 runs = 400 runs
 
@@ -89,7 +89,7 @@ Schedule configurations:
 
 TOTAL RUNS:
 -----------
-  Tier 1: 400 runs (excluding DINO placeholders until implemented)
+    Tier 1: 400 runs
   Tier 2:  90 runs
   ─────────────────
   Total:  490 runs
@@ -296,7 +296,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "diversity_mode": "distance_to_selected"
         },
         tier=Tier.CORE,
-        description="[PLACEHOLDER] DINO feature-based diversity sampling",
+        description="DINO feature-based diversity sampling",
         requires_dino=True
     )
 
@@ -331,13 +331,12 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
     )
 
     # C2: All Three with phased schedule
-    # PLACEHOLDER: Requires DINO selector
     configs["C2"] = ExperimentConfig(
         id="C2",
         name="Combined: All Three Phased",
         strategy="scheduled_hybrid",
         config={
-            "selectors": ["geometric", "loss_based", "dino"],  # PLACEHOLDER
+            "selectors": ["geometric", "loss_based", "dino"],
             "schedule_type": "step",
             "milestones": [
                 [0,     [0.4, 0.1, 0.5]],   # Phase 1: Geo+DINO (diversity)
@@ -362,7 +361,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             }
         },
         tier=Tier.CORE,
-        description="[PLACEHOLDER] Three-phase: Diversity→Balanced→Loss-focused",
+        description="Three-phase: Diversity→Balanced→Loss-focused",
         requires_dino=True
     )
 
@@ -554,27 +553,25 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
 # ============================================================================
 
 # Default scenes for experiments
-# These should be representative scenes from your dataset
+# ScanNet++ scene IDs
 DEFAULT_SCENES_TIER1 = [
-    # Add your 10 scenes here
-    # Example ScanNet++ scenes:
-    "0a5c013435",
-    "0a7cc12c0e",
     "0c5385e84b",
-    "1a8b8191ce",
-    "2a5e70c9e6",
-    "3b8ffae539",
-    "4a783e8b0d",
-    "5c9df13a22",
-    "6d8e9f4b11",
-    "7e2a3c5d88",
+    "5371eff4f9",
+    "56a0ec536c",
+    "5a269ba6fe",
+    "ab046f8faf",
+    "c0f5742640",
+    "c173f62b15",
+    "dc263dfbf0",
+    "dffce1cf9a",
+    "f248c2bcdc",
 ]
 
 # Reduced set for hyperparameter sensitivity (Tier 2)
 DEFAULT_SCENES_TIER2 = [
-    "0a5c013435",
     "0c5385e84b",
-    "1a8b8191ce",
+    "5371eff4f9",
+    "56a0ec536c",
 ]
 
 # Seeds for reproducibility
@@ -595,6 +592,9 @@ TRAINING_DEFAULTS = {
     "checkpoint_iterations": [],
     "data_device": "cpu",
     "resolution": 2,  # Half resolution for speed (adjust as needed)
+    # Forwarded to train_gsplat.py as --images. Useful for COLMAP datasets like mip-nerf-360
+    # that ship pre-downscaled folders (images_2/images_4/images_8)
+    "images": None,
     "logger": "wandb",
 }
 
@@ -627,7 +627,6 @@ class AblationRunner:
         wandb_project: str = "3DGS",
         wandb_entity: str = "fabian-grob-technical-university-of-munich",
         verbose: bool = True,
-        skip_dino: bool = True,
         minimal_disk: bool = True,
         keep_wandb_local: bool = True,
         disable_selection_logs: bool = False,
@@ -651,7 +650,6 @@ class AblationRunner:
             wandb_project: W&B project name if using wandb
             wandb_entity: W&B entity/team name if using wandb
             verbose: Whether to print verbose output
-            skip_dino: Whether to skip experiments requiring DINO (not yet implemented)
         """
         self.repo_path = os.path.abspath(repo_path)
         self.data_root = os.path.abspath(data_root)
@@ -666,7 +664,6 @@ class AblationRunner:
         self.wandb_project = wandb_project
         self.wandb_entity = wandb_entity
         self.verbose = verbose
-        self.skip_dino = skip_dino
         self.minimal_disk = minimal_disk
         self.keep_wandb_local = keep_wandb_local
         self.disable_selection_logs = disable_selection_logs
@@ -715,6 +712,17 @@ class AblationRunner:
             # Try alternative structure: data_root/scene_id
             scene_path = os.path.join(self.data_root, scene)
         return scene_path
+
+    @staticmethod
+    def _is_colmap_scene(scene_path: str) -> bool:
+        """Heuristic: returns True if the scene looks like a COLMAP dataset."""
+        sparse0 = os.path.join(scene_path, "sparse", "0")
+        if not os.path.isdir(sparse0):
+            return False
+        # Require cameras + images to exist (bin or txt)
+        has_cams = os.path.exists(os.path.join(sparse0, "cameras.bin")) or os.path.exists(os.path.join(sparse0, "cameras.txt"))
+        has_imgs = os.path.exists(os.path.join(sparse0, "images.bin")) or os.path.exists(os.path.join(sparse0, "images.txt"))
+        return has_cams and has_imgs
 
     @staticmethod
     def _find_latest_checkpoint(run_dir: str) -> Optional[str]:
@@ -779,11 +787,6 @@ class AblationRunner:
 
             # Filter by specific config IDs
             if config_ids is not None and config_id not in config_ids:
-                continue
-
-            # Skip DINO experiments if not implemented
-            if self.skip_dino and exp_config.requires_dino:
-                self.logger.warning(f"Skipping {config_id}: requires DINO (not yet implemented)")
                 continue
 
             # Determine scenes and seeds based on tier
@@ -853,9 +856,19 @@ class AblationRunner:
             "--view_selection_config", run_config.experiment.get_config_json(),
             "--iterations", str(self.training_params["iterations"]),
             "--data_device", self.training_params["data_device"],
-            "--resolution", str(self.training_params["resolution"]),
             "--logger", self.logger_backend,
         ]
+
+        # Optional: pick an images folder (e.g., images_2/images_4/images_8) for COLMAP datasets
+        if self.training_params.get("images"):
+            cmd.extend(["--images", str(self.training_params["images"])])
+            # set resolution to 1 when using pre-downscaled images
+            cmd.extend(["--resolution", "1"])
+
+        # For COLMAP datasets (e.g., mip-nerf-360), enable eval mode so a test split exists
+        # Without this, train_gsplat.py's final evaluation will assert on empty test cameras
+        if self._is_colmap_scene(run_config.data_path):
+            cmd.append("--eval")
 
         if not self.view_selection_verbose:
             cmd.append("--no_view_selection_verbose")
@@ -870,6 +883,10 @@ class AblationRunner:
 
         # Add test iterations
         cmd.extend(["--test_iterations"] + [str(i) for i in self.training_params["test_iterations"]])
+
+        # If resolution hasn't been set via --images, set it now
+        if not any(arg == "--resolution" for arg in cmd):
+            cmd.extend(["--resolution", str(self.training_params["resolution"])])
 
         # Disk-minimal defaults:
         # - Do not write point_cloud/*.ply snapshots
@@ -1113,8 +1130,7 @@ class AblationRunner:
                 if config.tier != tier:
                     continue
 
-                status = "[SKIP: DINO]" if config.requires_dino and self.skip_dino else ""
-                print(f"\n  {config_id}: {config.name} {status}")
+                print(f"\n  {config_id}: {config.name}")
                 print(f"      Strategy: {config.strategy}")
                 print(f"      Description: {config.description}")
 
@@ -1130,10 +1146,8 @@ class AblationRunner:
         print("\n" + "=" * 80)
 
         # Count runs
-        tier1_configs = sum(1 for c in self.all_configs.values()
-                          if c.tier == Tier.CORE and not (c.requires_dino and self.skip_dino))
-        tier2_configs = sum(1 for c in self.all_configs.values()
-                          if c.tier == Tier.SENSITIVITY and not (c.requires_dino and self.skip_dino))
+        tier1_configs = sum(1 for c in self.all_configs.values() if c.tier == Tier.CORE)
+        tier2_configs = sum(1 for c in self.all_configs.values() if c.tier == Tier.SENSITIVITY)
 
         tier1_runs = tier1_configs * len(self.scenes_tier1) * len(self.seeds_tier1)
         tier2_runs = tier2_configs * len(self.scenes_tier2) * len(self.seeds_tier2)
@@ -1220,12 +1234,6 @@ Examples:
         help="List all experiment configurations and exit"
     )
     parser.add_argument(
-        "--include_dino",
-        action="store_true",
-        help="Include DINO experiments (requires DINOSelector to be implemented)"
-    )
-
-    parser.add_argument(
         "--full_disk",
         action="store_true",
         help="Disable minimal-disk mode (save point clouds, checkpoints, and selection logs as configured)",
@@ -1310,6 +1318,12 @@ Examples:
         help="Override training resolution for all runs"
     )
     parser.add_argument(
+        "--images",
+        type=str,
+        default=TRAINING_DEFAULTS["images"],
+        help="Forwarded to train_gsplat.py as --images (e.g., images_2/images_4/images_8 for COLMAP/mip-nerf-360)"
+    )
+    parser.add_argument(
         "--data_device",
         type=str,
         default=TRAINING_DEFAULTS["data_device"],
@@ -1363,7 +1377,6 @@ def main():
             repo_path=repo_path,
             data_root=args.data_root or "/tmp",
             output_root=args.output_root or "/tmp",
-            skip_dino=not args.include_dino,
         )
         runner.print_experiment_summary()
         return
@@ -1396,7 +1409,6 @@ def main():
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
         verbose=not args.quiet,
-        skip_dino=not args.include_dino,
         minimal_disk=not args.full_disk,
         keep_wandb_local=not args.delete_wandb_local,
         disable_selection_logs=args.disable_selection_logs,
@@ -1405,6 +1417,7 @@ def main():
             "iterations": args.iterations,
             "resolution": args.resolution,
             "data_device": args.data_device,
+            "images": args.images,
             "test_iterations": args.test_iterations,
             "save_iterations": args.save_iterations,
             "checkpoint_iterations": args.checkpoint_iterations,

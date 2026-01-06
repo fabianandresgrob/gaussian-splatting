@@ -40,18 +40,46 @@ class Scene:
         self.train_cameras = {}
         self.test_cameras = {}
 
-        # Local import to avoid circular import with dataset.py during package initialization.
-        from dataset import readScannetppInfo
+        # Dataset auto-detection
+        # - COLMAP: expects images/ and sparse/0/{cameras,images,points3D}.*
+        # - ScanNet++: custom nerfstudio + colmap export layout
+        # - Blender/NeRF synthetic: transforms_{train,test}.json
+        source_path = args.source_path
 
-        # scene_info = sceneLoadTypeCallbacks["Scannetpp"](args.source_path)
-        scene_info = readScannetppInfo(args.source_path)
-        # if os.path.exists(os.path.join(args.source_path, "sparse")):
-        #     scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
-        # elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
-        #     print("Found transforms_train.json file, assuming Blender data set!")
-        #     scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
-        # else:
-        #     assert False, "Could not recognize scene type!"
+        is_colmap = os.path.exists(os.path.join(source_path, "sparse"))
+        is_blender = os.path.exists(os.path.join(source_path, "transforms_train.json"))
+        is_scannetpp = (
+            os.path.exists(os.path.join(source_path, "nerfstudio", "transforms_undistorted.json"))
+            or os.path.exists(os.path.join(source_path, "nerfstudio", "transforms.json"))
+        )
+
+        if is_colmap:
+            scene_info = sceneLoadTypeCallbacks["Colmap"](
+                source_path,
+                args.images,
+                args.depths,
+                args.eval,
+                args.train_test_exp,
+            )
+        elif is_scannetpp:
+            # Local import to avoid circular import with dataset.py during package initialization.
+            from dataset import readScannetppInfo
+
+            scene_info = readScannetppInfo(source_path)
+        elif is_blender:
+            print("Found transforms_train.json file, assuming Blender data set!")
+            scene_info = sceneLoadTypeCallbacks["Blender"](
+                source_path,
+                args.white_background,
+                args.depths,
+                args.eval,
+            )
+        else:
+            assert False, (
+                "Could not recognize scene type. Expected one of: "
+                "COLMAP (sparse/), ScanNet++ (nerfstudio/transforms*.json), "
+                "or Blender (transforms_train.json)."
+            )
 
         if not self.loaded_iter:
             # with open(scene_info.ply_path, 'rb') as src_file, open(os.path.join(self.model_path, "input.ply") , 'wb') as dest_file:

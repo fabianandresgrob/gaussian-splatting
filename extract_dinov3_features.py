@@ -21,7 +21,7 @@ Usage:
     python extract_dinov3_features.py --data_root ~/data/scenes/data --model dinov3-vitb16
 
 Output:
-    Creates dino_features/features.pt in each scene's dslr folder containing:
+    Creates dino_features/features.pt under each scene containing:
     {
         'DSC00001': tensor([...]),  # shape: (embedding_dim,)
         'DSC00002': tensor([...]),
@@ -422,7 +422,11 @@ def main():
     # Process each scene
     for scene_path in scenes:
         scene_id = scene_path.name
-        output_dir = scene_path / 'dslr' / 'dino_features'
+        # Support multiple dataset layouts:
+        # - ScanNet++: <scene>/dslr/... (we store embeddings under <scene>/dslr/dino_features)
+        # - COLMAP / mip-nerf-360: <scene>/images + <scene>/sparse (store under <scene>/dino_features)
+        base_dir = (scene_path / 'dslr') if (scene_path / 'dslr').exists() else scene_path
+        output_dir = base_dir / 'dino_features'
         output_path = output_dir / args.output_name
         
         print(f"\nProcessing scene: {scene_id}")
@@ -455,7 +459,7 @@ def main():
     
     print("\nDone!")
     print(f"\nTo use these features with DINOSelector:")
-    print(f"  config = {{'embeddings_path': '<scene_path>/dslr/dino_features/{args.output_name}'}}")
+    print(f"  config = {{'embeddings_path': '<scene_path>/dino_features/{args.output_name}'}}")
     print(f"  selector = build_selector('dino', config=config)")
 
 
