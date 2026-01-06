@@ -100,15 +100,19 @@ class LossBasedSelector(ViewSelector):
 
         uid = camera.uid
 
-        # Initialize if this camera hasn't been seen
-        if uid not in self.ema_losses:
-            self.ema_losses[uid] = loss
+        # Initialize EMA with the first actual observation for this camera
+        # Note: initialize() pre-populates ema_losses with 0.0 for all cameras
+        # Using EMA from 0.0 would shrink the first real loss by (1-ema_decay)
+        # Checking the sample count avoids that and treats the first sample as the baseline
+        prev_count = self.loss_sample_counts.get(uid, 0)
+        if uid not in self.ema_losses or prev_count == 0:
+            self.ema_losses[uid] = float(loss)
             self.loss_sample_counts[uid] = 1
         else:
             # Update EMA: new_ema = decay * old_ema + (1 - decay) * new_value
             old_ema = self.ema_losses[uid]
-            self.ema_losses[uid] = self.ema_decay * old_ema + (1 - self.ema_decay) * loss
-            self.loss_sample_counts[uid] += 1
+            self.ema_losses[uid] = self.ema_decay * old_ema + (1 - self.ema_decay) * float(loss)
+            self.loss_sample_counts[uid] = prev_count + 1
 
         if self.verbose and self.loss_sample_counts[uid] % 100 == 0:
             self.logger.debug(f"Camera {uid} ({camera.image_name}): "
