@@ -174,31 +174,55 @@ class ClusteringSelector(ViewSelector):
         Returns:
             Dictionary mapping camera uid to probability
         """
-        # Compute score for each cluster
-        # Score is inversely proportional to: (cluster_size + selection_count)
-        cluster_scores = {}
-        for cluster_id in self.cluster_sizes.keys():
-            base_size = self.cluster_sizes[cluster_id]
-            selection_count = self.cluster_selection_counts[cluster_id]
-            # Higher score for smaller, less-selected clusters
-            cluster_scores[cluster_id] = 1.0 / (base_size + selection_count + 1e-8)
+        # Intended behavior:
+        # - Give *cluster-level* probability mass inversely proportional to cluster size
+        #   (small clusters => higher mass)
+        # - Optionally down-weight clusters that have already been selected often
+        # - Distribute each cluster's mass uniformly across cameras in that cluster
+        # This ensures cluster mass is not accidentally inflated just because a cluster
+        # has many cameras.
 
-        # Assign each camera the score of its cluster
-        camera_scores = {}
+        eps = 1e-12
+
+        # Base weight per cluster (smaller cluster => higher weight)
+        cluster_weights: Dict[int, float] = {}
+        for cluster_id, base_size in self.cluster_sizes.items():
+            sel = self.cluster_selection_counts.get(cluster_id, 0)
+            # Keep existing "less-selected clusters" intuition, but at cluster level
+            # (size + sel) keeps weights bounded and decreases as cluster is used more
+            denom = float(base_size + sel)
+            cluster_weights[int(cluster_id)] = 1.0 / (denom + eps)
+
+        # Normalize to get a cluster distribution
+        cluster_ids = sorted(cluster_weights.keys())
+        w = np.array([cluster_weights[c] for c in cluster_ids], dtype=np.float64)
+        if w.sum() <= 0:
+            w = np.ones_like(w)
+        p_cluster = w / w.sum()
+
+        # Apply temperature as sharpening/flattening of the cluster distribution.
+        # Using p^(1/T) keeps the semantics intuitive:
+        #   T<1 -> peakier, T>1 -> flatter.
+        if self.temperature is not None and float(self.temperature) > 0 and float(self.temperature) != 1.0:
+            t = float(self.temperature)
+            p_cluster = np.power(np.clip(p_cluster, eps, 1.0), 1.0 / t)
+            p_cluster = p_cluster / p_cluster.sum()
+
+        # Now assign each camera probability = p(cluster) / |cluster|
+        cluster_id_to_idx = {c: i for i, c in enumerate(cluster_ids)}
+        probabilities_dict: Dict[int, float] = {}
         for cam in self.all_cameras:
-            cluster_id = self.camera_clusters[cam.uid]
-            camera_scores[cam.uid] = cluster_scores[cluster_id]
+            c = int(self.camera_clusters[cam.uid])
+            idx = cluster_id_to_idx.get(c, None)
+            if idx is None:
+                continue
+            size = float(self.cluster_sizes.get(c, 1))
+            probabilities_dict[cam.uid] = float(p_cluster[idx] / max(size, 1.0))
 
-        # Convert to probabilities using softmax
-        uids = list(camera_scores.keys())
-        scores = np.array([camera_scores[uid] for uid in uids])
-        probabilities = softmax(scores / self.temperature)
-
-        probabilities_dict = {
-            uid: float(probabilities[i])
-            for i, uid in enumerate(uids)
-        }
-
+        # Final renormalization (defensive)
+        s = float(sum(probabilities_dict.values()))
+        if s > 0:
+            probabilities_dict = {uid: float(p / s) for uid, p in probabilities_dict.items()}
         return probabilities_dict
 
     def compute_probabilities(self, gaussians, iteration: int) -> Dict[int, float]:

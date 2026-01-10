@@ -97,7 +97,46 @@ class GaussianModel:
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
+
+        # NOTE: Some checkpoints (especially ones saved on crash via *_error.pth)
+        # can contain Adam state tensors that don't match current parameter shapes
+        # (e.g., after densification/pruning). torch.optim.Adam won't necessarily
+        # validate this during load_state_dict, and will instead crash later during
+        # optimizer.step() with a shape mismatch in foreach ops.
         self.optimizer.load_state_dict(opt_dict)
+        self._sanitize_optimizer_state()
+
+    def _sanitize_optimizer_state(self) -> None:
+        """Ensure optimizer state tensors match current parameter shapes.
+
+        This protects resume from checkpoints that have inconsistent Adam state
+        (common when saved during an exception). If a state tensor shape doesn't
+        match its parameter, we reset it to zeros_like(param).
+        """
+        if self.optimizer is None:
+            return
+
+        fixed = 0
+        for group in self.optimizer.param_groups:
+            for param in group.get("params", []):
+                if param is None:
+                    continue
+                state = self.optimizer.state.get(param)
+                if not state:
+                    continue
+
+                # Adam / SparseGaussianAdam use these keys; keep it conservative.
+                for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+                    tensor = state.get(key)
+                    if tensor is None or not torch.is_tensor(tensor):
+                        continue
+                    if tensor.shape != param.shape:
+                        state[key] = torch.zeros_like(param, memory_format=torch.preserve_format)
+                        fixed += 1
+
+        if fixed > 0:
+            # Avoid depending on external logging here; keep it simple.
+            print(f"[Checkpoint] Warning: reset {fixed} optimizer state tensor(s) due to shape mismatch")
 
     @property
     def get_scaling(self):

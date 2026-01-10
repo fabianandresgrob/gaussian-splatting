@@ -282,12 +282,90 @@ class ScheduledHybridSelector(ViewSelector):
         if total > 0:
             combined_scores = {uid: score / total for uid, score in combined_scores.items()}
 
+        # Optional: apply hybrid-level temperature to sharpen/flatten the combined distribution.
+        # We interpret temperature as acting on probabilities via p^(1/T), which has the
+        # intuitive behavior: T<1 => peakier, T>1 => flatter.
+        if self.temperature is not None and float(self.temperature) > 0 and float(self.temperature) != 1.0:
+            eps = 1e-12
+            t = float(self.temperature)
+            uids = list(combined_scores.keys())
+            p = np.array([combined_scores[uid] for uid in uids], dtype=np.float64)
+            p = np.power(np.clip(p, eps, 1.0), 1.0 / t)
+            p = p / p.sum()
+            combined_scores = {uid: float(p[i]) for i, uid in enumerate(uids)}
+
         # Log current weights periodically
         if self.verbose and iteration % 1000 == 0 and iteration > 0:
             self.logger.debug(f"Iter {iteration}: weights={[f'{w:.3f}' for w in weights]} "
                             f"selectors={self.selector_names}")
 
         return combined_scores
+
+    def select_view(self, gaussians, iteration: int):
+        """Select a camera using the combined distribution and notify sub-selectors.
+
+        This override is important for *stateful* sub-selectors whose probabilities
+        depend on the history of selections (e.g. DINO 'distance_to_selected',
+        clustering selection-count adaptation). If we only call their
+        compute_probabilities() but never forward which camera was actually chosen,
+        their internal state would never update and their behavior would silently
+        differ from the intended design.
+        """
+        if not self.initialized:
+            raise RuntimeError("ViewSelector must be initialized before use. Call initialize() first.")
+
+        # Get current weights
+        weights = self._get_current_weights(iteration)
+
+        # Compute each sub-selector's probabilities (keep for notification)
+        uids = [cam.uid for cam in self.all_cameras]
+        uid_to_idx = {uid: i for i, uid in enumerate(uids)}
+
+        combined = np.zeros(len(uids), dtype=np.float64)
+        per_selector_probs: List[Dict[int, float]] = []
+
+        for selector, weight in zip(self.sub_selectors, weights):
+            probs = selector.compute_probabilities(gaussians, iteration)
+            per_selector_probs.append(probs)
+            for uid, prob in probs.items():
+                idx = uid_to_idx.get(uid, None)
+                if idx is not None:
+                    combined[idx] += float(weight) * float(prob)
+
+        # Normalize combined distribution
+        s = float(combined.sum())
+        if s <= 0:
+            combined = np.ones_like(combined) / float(len(combined))
+        else:
+            combined = combined / s
+
+        # Apply hybrid-level temperature (same semantics as compute_probabilities)
+        if self.temperature is not None and float(self.temperature) > 0 and float(self.temperature) != 1.0:
+            eps = 1e-12
+            t = float(self.temperature)
+            combined = np.power(np.clip(combined, eps, 1.0), 1.0 / t)
+            combined = combined / float(combined.sum())
+
+        # Sample
+        selected_idx = int(self.rng.choice(len(uids), p=combined))
+        selected_uid = uids[selected_idx]
+        selected_cam = None
+        for cam in self.all_cameras:
+            if cam.uid == selected_uid:
+                selected_cam = cam
+                break
+        if selected_cam is None:
+            raise RuntimeError(f"Camera with uid {selected_uid} not found in all_cameras")
+
+        # Log hybrid selection
+        self.log_selection(selected_cam, float(combined[selected_idx]), iteration)
+
+        # Notify sub-selectors of the realized selection so stateful ones update.
+        for selector, probs in zip(self.sub_selectors, per_selector_probs):
+            if hasattr(selector, "log_selection"):
+                selector.log_selection(selected_cam, float(probs.get(selected_uid, 0.0)), iteration)
+
+        return selected_cam
 
     def update_loss(self, camera, loss: float) -> None:
         """

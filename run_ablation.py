@@ -278,7 +278,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         config={
             "ema_decay": 0.92,
             "temperature": 0.3,
-            "min_samples_before_bias": 0
+            "min_samples_before_bias": 2
         },
         tier=Tier.CORE,
         description="EMA loss tracking, prioritize high-loss views"
