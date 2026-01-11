@@ -40,8 +40,6 @@ class ClusteringSelector(ViewSelector):
                 - min_samples (int): DBSCAN min_samples parameter. Default: 3
                 - temperature (float): Softmax temperature. Default: 1.0
                 - use_orientation (bool): Include viewing direction in clustering. Default: True
-                - update_frequency (int): How often to recompute probabilities (in iterations).
-                  Default: 100 (recompute every 100 iterations)
             log_dir: Directory to save selection logs
             verbose: If True, print detailed information
             seed: Random seed for reproducibility
@@ -53,14 +51,11 @@ class ClusteringSelector(ViewSelector):
         self.min_samples = self.config.get('min_samples', 3)
         self.temperature = self.config.get('temperature', 1.0)
         self.use_orientation = self.config.get('use_orientation', True)
-        self.update_frequency = self.config.get('update_frequency', 100)
 
         self.clusterer = None  # Will hold KMeans or DBSCAN instance
         self.camera_clusters = {}  # Maps camera uid to cluster id
         self.cluster_sizes = {}  # Maps cluster id to number of cameras
-        self.cluster_selection_counts = {}  # Maps cluster id to selection count
-        self.last_update_iteration = 0
-        self.current_probabilities = None
+        self.probabilities = None
 
     def initialize(self, all_cameras: List) -> None:
         """
@@ -77,7 +72,6 @@ class ClusteringSelector(ViewSelector):
         else:
             self.logger.debug(f"DBSCAN eps: {self.eps}, min_samples: {self.min_samples}")
         self.logger.debug(f"Use orientation: {self.use_orientation}")
-        self.logger.debug(f"Update frequency: {self.update_frequency} iterations")
 
         # Extract features for clustering
         features = []
@@ -153,23 +147,20 @@ class ClusteringSelector(ViewSelector):
         for cluster_id in unique_clusters:
             self.cluster_sizes[int(cluster_id)] = int(np.sum(cluster_labels == cluster_id))
 
-        # Initialize selection counts
-        self.cluster_selection_counts = {int(cluster_id): 0 for cluster_id in unique_clusters}
-
         if self.verbose:
             self.logger.debug(f"Final number of clusters: {self.n_clusters}")
             self.logger.debug(f"Cluster sizes: {self.cluster_sizes}")
             avg_size = np.mean(list(self.cluster_sizes.values()))
             self.logger.debug(f"Average cluster size: {avg_size:.2f}")
 
-        # Compute initial probabilities
-        self.current_probabilities = self._compute_probabilities_internal()
+        # Compute probabilities (static based on cluster sizes)
+        self.probabilities = self._compute_probabilities_internal()
 
         self.initialized = True
 
     def _compute_probabilities_internal(self) -> Dict[int, float]:
         """
-        Internal method to compute probabilities based on current cluster statistics.
+        Internal method to compute probabilities based on cluster sizes.
 
         Returns:
             Dictionary mapping camera uid to probability
@@ -177,7 +168,6 @@ class ClusteringSelector(ViewSelector):
         # Intended behavior:
         # - Give *cluster-level* probability mass inversely proportional to cluster size
         #   (small clusters => higher mass)
-        # - Optionally down-weight clusters that have already been selected often
         # - Distribute each cluster's mass uniformly across cameras in that cluster
         # This ensures cluster mass is not accidentally inflated just because a cluster
         # has many cameras.
@@ -187,11 +177,7 @@ class ClusteringSelector(ViewSelector):
         # Base weight per cluster (smaller cluster => higher weight)
         cluster_weights: Dict[int, float] = {}
         for cluster_id, base_size in self.cluster_sizes.items():
-            sel = self.cluster_selection_counts.get(cluster_id, 0)
-            # Keep existing "less-selected clusters" intuition, but at cluster level
-            # (size + sel) keeps weights bounded and decreases as cluster is used more
-            denom = float(base_size + sel)
-            cluster_weights[int(cluster_id)] = 1.0 / (denom + eps)
+            cluster_weights[int(cluster_id)] = 1.0 / (float(base_size) + eps)
 
         # Normalize to get a cluster distribution
         cluster_ids = sorted(cluster_weights.keys())
@@ -227,47 +213,31 @@ class ClusteringSelector(ViewSelector):
 
     def compute_probabilities(self, gaussians, iteration: int) -> Dict[int, float]:
         """
-        Compute probabilities based on cluster statistics.
-
-        Recomputes every update_frequency iterations to adapt to selection patterns.
+        Return precomputed probabilities based on cluster sizes.
 
         Args:
             gaussians: Current Gaussian model (unused)
-            iteration: Current training iteration
+            iteration: Current training iteration (unused)
 
         Returns:
             Dictionary mapping camera uid to probability
         """
-        # Check if we need to recompute probabilities
-        if iteration - self.last_update_iteration >= self.update_frequency:
-            self.current_probabilities = self._compute_probabilities_internal()
-            self.last_update_iteration = iteration
-
-            if self.verbose and iteration > 0:
-                self.logger.debug(f"Updated probabilities at iteration {iteration}")
-                self.logger.debug(f"Cluster selection counts: {self.cluster_selection_counts}")
-
-        return self.current_probabilities
+        return self.probabilities
 
     def log_selection(self, cam, score: float, iteration: int) -> None:
         """
-        Record selection and update cluster statistics.
+        Record selection.
 
         Args:
             cam: Selected Camera object
             score: Probability that led to this selection
             iteration: Current training iteration
         """
-        # Call parent logging
         super().log_selection(cam, score, iteration)
-
-        # Update cluster selection count
-        cluster_id = self.camera_clusters[cam.uid]
-        self.cluster_selection_counts[cluster_id] += 1
 
     def get_cluster_statistics(self) -> Dict:
         """
-        Get statistics about cluster selection patterns.
+        Get statistics about clusters.
 
         Returns:
             Dictionary with cluster statistics
@@ -276,12 +246,6 @@ class ClusteringSelector(ViewSelector):
             'clustering_method': self.clustering_method,
             'n_clusters': self.n_clusters,
             'cluster_sizes': self.cluster_sizes,
-            'cluster_selection_counts': self.cluster_selection_counts,
-            'selections_per_camera_per_cluster': {
-                cluster_id: self.cluster_selection_counts[cluster_id] / self.cluster_sizes[cluster_id]
-                if self.cluster_sizes[cluster_id] > 0 else 0
-                for cluster_id in self.cluster_sizes.keys()
-            }
         }
         return stats
 
