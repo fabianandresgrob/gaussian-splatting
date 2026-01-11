@@ -16,15 +16,12 @@ class LossBasedSelector(ViewSelector):
     """
     Selector that prioritizes cameras with higher rendering loss.
 
-    Uses Exponential Moving Average (EMA) to track loss per camera:
-    - Cameras with higher average loss get higher sampling probability
-    - EMA smooths loss estimates over time with configurable decay
+    Tracks the most recent loss per camera (no smoothing/EMA):
+    - Cameras with higher loss get higher sampling probability
     - Falls back to uniform sampling for cameras without loss history
     - Once min_samples_before_bias is reached, switches to loss-biased sampling
 
     Config parameters:
-        - ema_decay (float): EMA decay factor for loss tracking. Default: 0.99
-          Higher values = more weight on historical losses
         - temperature (float): Softmax temperature for probability calculation. Default: 1.0
           Higher values = more uniform, lower values = more peaked
         - min_samples_before_bias (int): Minimum samples per camera before applying
@@ -48,17 +45,16 @@ class LossBasedSelector(ViewSelector):
         super().__init__(config, log_dir, verbose, seed)
 
         # Configuration parameters
-        self.ema_decay = self.config.get('ema_decay', 0.99)
         self.temperature = self.config.get('temperature', 1.0)
         self.min_samples_before_bias = self.config.get('min_samples_before_bias', 5)
 
-        # Loss tracking
-        self.ema_losses = {}  # Dict mapping camera uid to EMA loss
+        # Loss tracking - stores raw (most recent) loss per camera, no smoothing
+        self.losses = {}  # Dict mapping camera uid to most recent loss
         self.loss_sample_counts = {}  # Dict mapping camera uid to number of loss updates
 
         if self.verbose:
-            self.logger.debug(f"Configuration: ema_decay={self.ema_decay}, "
-                            f"temperature={self.temperature}, min_samples={self.min_samples_before_bias}")
+            self.logger.debug(f"Configuration: temperature={self.temperature}, "
+                            f"min_samples={self.min_samples_before_bias}")
 
     def initialize(self, all_cameras: List) -> None:
         """
@@ -71,7 +67,7 @@ class LossBasedSelector(ViewSelector):
 
         # Initialize loss tracking for each camera
         for cam in all_cameras:
-            self.ema_losses[cam.uid] = 0.0
+            self.losses[cam.uid] = 0.0
             self.loss_sample_counts[cam.uid] = 0
 
         self.initialized = True
@@ -80,8 +76,9 @@ class LossBasedSelector(ViewSelector):
 
     def update_loss(self, camera, loss: float) -> None:
         """
-        Update the EMA loss for a specific camera.
+        Update the loss for a specific camera.
 
+        Stores the raw loss value directly (no EMA smoothing).
         This method should be called from the training loop after rendering
         a view and computing the loss.
 
@@ -100,23 +97,13 @@ class LossBasedSelector(ViewSelector):
 
         uid = camera.uid
 
-        # Initialize EMA with the first actual observation for this camera
-        # Note: initialize() pre-populates ema_losses with 0.0 for all cameras
-        # Using EMA from 0.0 would shrink the first real loss by (1-ema_decay)
-        # Checking the sample count avoids that and treats the first sample as the baseline
-        prev_count = self.loss_sample_counts.get(uid, 0)
-        if uid not in self.ema_losses or prev_count == 0:
-            self.ema_losses[uid] = float(loss)
-            self.loss_sample_counts[uid] = 1
-        else:
-            # Update EMA: new_ema = decay * old_ema + (1 - decay) * new_value
-            old_ema = self.ema_losses[uid]
-            self.ema_losses[uid] = self.ema_decay * old_ema + (1 - self.ema_decay) * float(loss)
-            self.loss_sample_counts[uid] = prev_count + 1
+        # Store raw loss directly (no smoothing)
+        self.losses[uid] = float(loss)
+        self.loss_sample_counts[uid] = self.loss_sample_counts.get(uid, 0) + 1
 
         if self.verbose and self.loss_sample_counts[uid] % 100 == 0:
             self.logger.debug(f"Camera {uid} ({camera.image_name}): "
-                  f"EMA loss = {self.ema_losses[uid]:.6f} "
+                  f"loss = {self.losses[uid]:.6f} "
                   f"(samples: {self.loss_sample_counts[uid]})")
 
     def compute_probabilities(self, gaussians, iteration: int) -> Dict[int, float]:
@@ -157,7 +144,7 @@ class LossBasedSelector(ViewSelector):
             for cam in self.all_cameras:
                 uid = cam.uid
                 # Higher loss = higher score for sampling
-                losses.append(self.ema_losses[uid])
+                losses.append(self.losses[uid])
                 uids.append(uid)
 
             losses = np.array(losses)
@@ -191,17 +178,17 @@ class LossBasedSelector(ViewSelector):
         Returns:
             Dictionary with loss statistics including mean, std, min, max losses
         """
-        if not self.ema_losses:
+        if not self.losses:
             return {}
 
-        losses = list(self.ema_losses.values())
+        losses = list(self.losses.values())
         sample_counts = list(self.loss_sample_counts.values())
 
         stats = {
-            'mean_ema_loss': float(np.mean(losses)),
-            'std_ema_loss': float(np.std(losses)),
-            'min_ema_loss': float(np.min(losses)),
-            'max_ema_loss': float(np.max(losses)),
+            'mean_loss': float(np.mean(losses)),
+            'std_loss': float(np.std(losses)),
+            'min_loss': float(np.min(losses)),
+            'max_loss': float(np.max(losses)),
             'mean_sample_count': float(np.mean(sample_counts)),
             'min_sample_count': int(np.min(sample_counts)),
             'max_sample_count': int(np.max(sample_counts)),
@@ -228,7 +215,7 @@ class LossBasedSelector(ViewSelector):
                         f"unique cameras: {selection_stats.get('unique_cameras', 0)}")
 
         if loss_stats:
-            self.logger.info(f"  Loss: mean={loss_stats['mean_ema_loss']:.6f} ± {loss_stats['std_ema_loss']:.6f}, "
-                  f"range=[{loss_stats['min_ema_loss']:.6f}, {loss_stats['max_ema_loss']:.6f}]")
+            self.logger.info(f"  Loss: mean={loss_stats['mean_loss']:.6f} ± {loss_stats['std_loss']:.6f}, "
+                  f"range=[{loss_stats['min_loss']:.6f}, {loss_stats['max_loss']:.6f}]")
             self.logger.info(f"  Samples: count=[{loss_stats['min_sample_count']}, {loss_stats['max_sample_count']}], "
                   f"total={loss_stats['total_loss_updates']}")

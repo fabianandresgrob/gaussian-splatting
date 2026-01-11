@@ -263,12 +263,12 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Standalone: Geometric",
         strategy="geometric",
         config={
+            "mode": "distance_to_selected",  # Dynamic mode (tracks recent selections)
             "temperature": 0.3,
-            "distance_weight": 0.5,
-            "diversity_weight": 0.5
+            "recency_window": 500,  # How many recent selections to consider
         },
         tier=Tier.CORE,
-        description="Pose-based heuristics (distance from center + spatial diversity)"
+        description="Pose-based diversity with dynamic selection tracking"
     )
 
     configs["S2"] = ExperimentConfig(
@@ -276,12 +276,11 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Standalone: Loss-Based",
         strategy="loss_based",
         config={
-            "ema_decay": 0.92,
             "temperature": 0.3,
             "min_samples_before_bias": 2
         },
         tier=Tier.CORE,
-        description="EMA loss tracking, prioritize high-loss views"
+        description="Raw loss tracking, prioritize high-loss views"
     )
 
     configs["S3"] = ExperimentConfig(
@@ -293,10 +292,11 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "embeddings_path": "auto",
             "require_embeddings": True,
             "temperature": 0.3,
-            "diversity_mode": "distance_to_selected"
+            "diversity_mode": "distance_to_selected",
+            "recency_window": 500,  # How many recent selections to consider
         },
         tier=Tier.CORE,
-        description="DINO feature-based diversity sampling",
+        description="DINO feature-based diversity sampling with selection tracking",
         requires_dino=True
     )
 
@@ -316,12 +316,11 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "temperature": 1.0,
             # Sub-selector configs
             "geometric_config": {
+                "mode": "distance_to_selected",
                 "temperature": 1.0,
-                "distance_weight": 0.5,
-                "diversity_weight": 0.5
+                "recency_window": 500,
             },
             "loss_based_config": {
-                "ema_decay": 0.99,
                 "temperature": 1.0,
                 "min_samples_before_bias": 5
             }
@@ -345,19 +344,19 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             ],
             "temperature": 1.0,
             "geometric_config": {
+                "mode": "distance_to_selected",
                 "temperature": 1.0,
-                "distance_weight": 0.5,
-                "diversity_weight": 0.5
+                "recency_window": 500,
             },
             "loss_based_config": {
-                "ema_decay": 0.99,
                 "temperature": 1.0
             },
             "dino_config": {
                 "model": "dinov2_vitb14",
                 "embeddings_path": "auto",
                 "require_embeddings": True,
-                "temperature": 1.0
+                "temperature": 1.0,
+                "recency_window": 500,
             }
         },
         tier=Tier.CORE,
@@ -394,7 +393,6 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Loss-Based: Low Temperature",
         strategy="loss_based",
         config={
-            "ema_decay": 0.99,
             "temperature": 0.5,  # Peakier distribution
             "min_samples_before_bias": 5
         },
@@ -407,7 +405,6 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Loss-Based: High Temperature",
         strategy="loss_based",
         config={
-            "ema_decay": 0.99,
             "temperature": 2.0,  # More uniform
             "min_samples_before_bias": 5
         },
@@ -504,8 +501,8 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "weights_start": [0.5, 0.5],
             "weights_end": [0.5, 0.5],  # Constant weights
             "max_iterations": 30000,
-            "geometric_config": {"temperature": 1.0},
-            "loss_based_config": {"ema_decay": 0.99, "temperature": 1.0}
+            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500},
+            "loss_based_config": {"temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
         description="Constant 50/50 weighting (no schedule)"
@@ -521,8 +518,8 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "weights_start": [0.8, 0.2],
             "weights_end": [0.2, 0.8],
             "max_iterations": 30000,
-            "geometric_config": {"temperature": 1.0},
-            "loss_based_config": {"ema_decay": 0.99, "temperature": 1.0}
+            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500},
+            "loss_based_config": {"temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
         description="Cosine annealing schedule (smoother transition)"
@@ -538,8 +535,8 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "weights_start": [0.7, 0.3],
             "weights_end": [0.3, 0.7],
             "max_iterations": 30000,
-            "geometric_config": {"temperature": 1.0},
-            "loss_based_config": {"ema_decay": 0.99, "temperature": 1.0}
+            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500},
+            "loss_based_config": {"temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
         description="More geometric-heavy start [0.7,0.3]→[0.3,0.7]"

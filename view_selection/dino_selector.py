@@ -85,8 +85,17 @@ class DINOSelector(ViewSelector):
         self.embeddings_path = self.config.get('embeddings_path', None)
         self.temperature = self.config.get('temperature', 1.0)
         self.diversity_mode = self.config.get('diversity_mode', 'distance_to_selected')
-        self.recency_window = self.config.get('recency_window', 50)
+        # Recency window: use large default to properly down-weight duplicates/similar views
+        # For 30k iterations with ~100 cameras, 500-1000 ensures redundant content stays suppressed
+        self.recency_window = self.config.get('recency_window', 500)
         self.normalize_embeddings = self.config.get('normalize_embeddings', True)
+        
+        # Track cumulative selection counts per camera for long-term diversity
+        # NOTE: Disabled by default - this tracks by camera uid, not by content similarity,
+        # so duplicates with different uids would be tracked separately. The recency-based
+        # approach using feature similarity is the fair mechanism for diversity.
+        self.selection_counts = None  # Will be initialized in initialize()
+        self.use_cumulative_penalty = self.config.get('use_cumulative_penalty', False)
 
         # Behavior controls
         # If True, raise if embeddings cannot be located/loaded.
@@ -99,6 +108,7 @@ class DINOSelector(ViewSelector):
         self.cam_idx_to_row = {}  # Map camera index to embedding matrix row
         self.recent_selections = []  # List of recently selected camera indices
         self.fixed_scores = None  # For static modes (centroid, average_distance)
+        self.selection_counts = None  # Cumulative selection counts per camera
 
         self.logger.info(f"DINO Selector config: embeddings_path={self.embeddings_path}, "
                         f"temperature={self.temperature}, mode={self.diversity_mode}")
@@ -168,6 +178,9 @@ class DINOSelector(ViewSelector):
         # Precompute static scores if using static mode
         if self.embedding_matrix is not None and self.diversity_mode in ['distance_to_centroid', 'average_distance']:
             self._compute_fixed_scores()
+        
+        # Initialize cumulative selection counts
+        self.selection_counts = np.zeros(len(self.all_cameras))
 
         self.initialized = True
 
@@ -341,25 +354,38 @@ class DINOSelector(ViewSelector):
         Compute scores based on distance to recently selected views.
 
         Views far from recent selections get higher scores.
+        Additionally applies cumulative penalty to down-weight frequently selected views.
         """
         n_cameras = len(self.all_cameras)
 
         if not self.recent_selections:
             # No history yet, fall back to distance from centroid
             centroid = np.mean(self.embedding_matrix, axis=0, keepdims=True)
-            return np.linalg.norm(self.embedding_matrix - centroid, axis=1)
+            base_scores = np.linalg.norm(self.embedding_matrix - centroid, axis=1)
+        else:
+            # Get embeddings of recently selected cameras
+            recent_indices = self.recent_selections[-self.recency_window:]
+            recent_embeddings = self.embedding_matrix[recent_indices]
 
-        # Get embeddings of recently selected cameras
-        recent_indices = self.recent_selections[-self.recency_window:]
-        recent_embeddings = self.embedding_matrix[recent_indices]
-
-        # Compute similarity to recent selections (using dot product for normalized vectors)
-        # Shape: (n_cameras, n_recent)
-        similarities = self.embedding_matrix @ recent_embeddings.T
+            # Compute similarity to recent selections (using dot product for normalized vectors)
+            # Shape: (n_cameras, n_recent)
+            similarities = self.embedding_matrix @ recent_embeddings.T
+            
+            # Score = 1 - max_similarity (furthest from any recent selection)
+            max_similarities = similarities.max(axis=1)
+            base_scores = 1.0 - max_similarities
         
-        # Score = 1 - max_similarity (furthest from any recent selection)
-        max_similarities = similarities.max(axis=1)
-        scores = 1.0 - max_similarities
+        # Apply cumulative penalty: cameras selected many times get down-weighted
+        # This ensures that even after recency window, frequently selected views
+        # (like duplicates) accumulate penalty over time
+        if self.use_cumulative_penalty and self.selection_counts is not None:
+            # Penalty factor: 1 / (1 + alpha * count)
+            # Higher counts -> lower multiplier -> lower final score
+            alpha = 0.1  # Tunable: higher = stronger penalty for repeated selection
+            penalty = 1.0 / (1.0 + alpha * self.selection_counts)
+            scores = base_scores * penalty
+        else:
+            scores = base_scores
 
         return scores
 
@@ -371,6 +397,9 @@ class DINOSelector(ViewSelector):
         for i, c in enumerate(self.all_cameras):
             if c.uid == cam.uid:
                 self.recent_selections.append(i)
+                # Update cumulative selection count
+                if self.selection_counts is not None:
+                    self.selection_counts[i] += 1
                 break
 
         # Keep only recent selections to limit memory
