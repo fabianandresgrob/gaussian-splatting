@@ -23,6 +23,8 @@ from .stack_selector import StackBasedSelector
 from .loss_selector import LossBasedSelector
 from .gaussian_aware_selector import GaussianAwareSelector
 from .scheduled_hybrid_selector import ScheduledHybridSelector, get_standard_config, STANDARD_CONFIGS
+from .sequential_selector import SequentialSelector
+from .deterministic_loss_selector import DeterministicMaxLossSelector
 from .logging_utils import configure_logging, get_logger
 
 # Optional selectors (may require extra deps / may be incomplete)
@@ -46,6 +48,8 @@ SELECTOR_REGISTRY = {
     'loss_based': LossBasedSelector,
     'gaussian_aware': GaussianAwareSelector,
     'scheduled_hybrid': ScheduledHybridSelector,
+    'sequential': SequentialSelector,
+    'deterministic_max_loss': DeterministicMaxLossSelector,
 }
 
 if DINOSelector is not None:
@@ -126,6 +130,8 @@ __all__ = [
     'LossBasedSelector',
     'GaussianAwareSelector',
     'ScheduledHybridSelector',
+    'SequentialSelector',
+    'DeterministicMaxLossSelector',
     # Utilities
     'build_selector',
     'list_selectors',

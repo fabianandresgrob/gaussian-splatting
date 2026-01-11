@@ -12,11 +12,14 @@
 import os
 import random
 import json
+import numpy as np
 from utils.system_utils import searchForMaxIteration
-from scene.dataset_readers import sceneLoadTypeCallbacks
+from scene.dataset_readers import sceneLoadTypeCallbacks, storePly, fetchPly
 from scene.gaussian_model import GaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
+from utils.graphics_utils import BasicPointCloud
+from utils.sh_utils import SH2RGB
 
 class Scene:
 
@@ -113,7 +116,15 @@ class Scene:
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"), args.train_test_exp)
         else:
-            self.gaussians.create_from_pcd(scene_info.point_cloud, scene_info.train_cameras, self.cameras_extent)
+            # Check if we should use random point cloud initialization
+            use_random_pcd = getattr(args, 'random_pcd', False)
+            if use_random_pcd:
+                num_pts = getattr(args, 'random_pcd_num_points', 100000)
+                pcd = self._generate_random_point_cloud(scene_info.train_cameras, num_pts)
+                print(f"Using random point cloud initialization with {num_pts} points")
+            else:
+                pcd = scene_info.point_cloud
+            self.gaussians.create_from_pcd(pcd, scene_info.train_cameras, self.cameras_extent)
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
@@ -125,6 +136,52 @@ class Scene:
 
         with open(os.path.join(self.model_path, "exposure.json"), "w") as f:
             json.dump(exposure_dict, f, indent=2)
+
+    def _generate_random_point_cloud(self, cam_infos, num_points: int) -> BasicPointCloud:
+        """
+        Generate a random point cloud based on camera positions.
+
+        Points are distributed in a cube centered at the mean camera position,
+        with size based on the camera extent (spread of cameras).
+
+        Args:
+            cam_infos: List of camera info objects with R and T attributes
+            num_points: Number of random points to generate
+
+        Returns:
+            BasicPointCloud with random positions and colors
+        """
+        # Compute camera centers from extrinsics
+        # Camera center in world coords: C = -R^T * T
+        cam_centers = []
+        for cam in cam_infos:
+            R = cam.R  # Already transposed in COLMAP loader
+            T = cam.T
+            # World position of camera
+            center = -R @ T
+            cam_centers.append(center)
+
+        cam_centers = np.array(cam_centers)
+
+        # Compute bounding box from camera positions
+        center = np.mean(cam_centers, axis=0)
+        max_extent = np.max(np.abs(cam_centers - center))
+
+        # Scale extent to cover the scene (cameras typically look inward)
+        # Use 2x the camera spread to ensure we cover the scene
+        scene_size = max(max_extent * 2.0, 1.0)  # At least 1.0 to avoid degenerate cases
+
+        # Generate random points in a cube centered at the scene center
+        xyz = (np.random.random((num_points, 3)) - 0.5) * 2.0 * scene_size + center
+
+        # Random colors (small values in SH space)
+        shs = np.random.random((num_points, 3)) / 255.0
+        colors = SH2RGB(shs)
+
+        # Zero normals
+        normals = np.zeros((num_points, 3))
+
+        return BasicPointCloud(points=xyz, colors=colors, normals=normals)
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]

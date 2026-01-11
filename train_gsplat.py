@@ -303,6 +303,13 @@ def training(
     )
     selector.initialize(scene.getTrainCameras())
 
+    # Set up render context for deterministic_max_loss selector
+    if hasattr(selector, 'set_render_context'):
+        def combined_loss_fn(rendered, gt):
+            """Combined L1 + D-SSIM loss for max-loss selector."""
+            return l1_loss(rendered, gt) + opt.lambda_dssim * (1.0 - ssim(rendered, gt))
+        selector.set_render_context(render, pipe, background, combined_loss_fn)
+
     ema_loss_for_log = 0.0
     start_iter = first_iter + 1
     progress_bar = tqdm(range(start_iter, opt.iterations + 1), desc="Training progress")
@@ -604,6 +611,8 @@ if __name__ == "__main__":
             "gaussian_aware",
             "scheduled_hybrid",
             "dino",
+            "sequential",
+            "deterministic_max_loss",
         ],
     )
     parser.add_argument("--view_selection_config", type=str, default="{}")
