@@ -37,7 +37,7 @@ These are the primary experiments for the paper's main results table.
     S3   | dino              | Standalone: DINO feature diversity
     C1   | hybrid_geo_loss   | Combined: Geo→Loss schedule (explore→exploit)
     C2   | hybrid_all_three  | Combined: Geo+Loss+DINO phased schedule
-    CL   | clustering        | Clustering: K-means pose clustering
+    CL   | clustering        | Clustering: DBSCAN pose clustering (static)
 
   Total Tier 1: 8 configs × 50 runs = 400 runs
 
@@ -57,7 +57,7 @@ Secondary experiments to understand hyperparameter sensitivity.
   CL-5    | clustering   | n_clusters=5 (coarse clustering)
   CL-20   | clustering   | n_clusters=20 (fine clustering)
 
-  Clustering: DBSCAN vs K-Means:
+  Clustering: DBSCAN Variations:
   ID            | Strategy     | Variation
   --------------|--------------|----------------------------------------------
   CL-DBSCAN     | clustering   | DBSCAN eps=0.5 (adaptive clusters, outliers)
@@ -71,7 +71,13 @@ Secondary experiments to understand hyperparameter sensitivity.
   H-cosine| hybrid       | Geo+Loss cosine annealing schedule
   H-73    | hybrid       | Geo+Loss [0.7,0.3]→[0.3,0.7] (geo-heavy start)
 
-  Total Tier 2: 10 configs × 9 runs = 90 runs
+  New/Additional Strategies:
+  ID      | Strategy             | Variation
+  --------|----------------------|---------------------------------------------
+  SEQ     | sequential           | Deterministic sequential iteration (no randomness)
+  DML     | deterministic_max_loss | Always select highest-loss camera (expensive)
+
+  Total Tier 2: 12 configs × 9 runs = 108 runs
 
 HYBRID SCHEDULE RATIONALE:
 --------------------------
@@ -90,11 +96,11 @@ Schedule configurations:
 TOTAL RUNS:
 -----------
     Tier 1: 400 runs
-  Tier 2:  90 runs
+  Tier 2: 108 runs
   ─────────────────
-  Total:  490 runs
+  Total:  508 runs
 
-  Estimated time: ~15-20 min/run @ 30k iters → 120-165 GPU-hours
+  Estimated time: ~15-20 min/run @ 30k iters → 125-170 GPU-hours
 
 ================================================================================
 
@@ -265,7 +271,8 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         config={
             "mode": "distance_to_selected",  # Dynamic mode (tracks recent selections)
             "temperature": 0.3,
-            "recency_window": 500,  # How many recent selections to consider
+            "recency_window": 69,  # How many recent selections to consider
+            "use_cumulative_penalty": False,  # Don't track by uid
         },
         tier=Tier.CORE,
         description="Pose-based diversity with dynamic selection tracking"
@@ -277,10 +284,10 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         strategy="loss_based",
         config={
             "temperature": 0.3,
-            "min_samples_before_bias": 2
+            "min_samples_before_bias": 0,
         },
         tier=Tier.CORE,
-        description="Raw loss tracking, prioritize high-loss views"
+        description="Raw loss tracking (no EMA), prioritize high-loss views"
     )
 
     configs["S3"] = ExperimentConfig(
@@ -288,12 +295,13 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Standalone: DINO Features",
         strategy="dino",
         config={
-            "model": "dinov2_vitb14",
             "embeddings_path": "auto",
             "require_embeddings": True,
             "temperature": 0.3,
             "diversity_mode": "distance_to_selected",
-            "recency_window": 500,  # How many recent selections to consider
+            "recency_window": 69,  # How many recent selections to consider
+            "normalize_embeddings": True,
+            "use_cumulative_penalty": False,  # Don't track by uid
         },
         tier=Tier.CORE,
         description="DINO feature-based diversity sampling with selection tracking",
@@ -319,10 +327,11 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
                 "mode": "distance_to_selected",
                 "temperature": 1.0,
                 "recency_window": 500,
+                "use_cumulative_penalty": False,
             },
             "loss_based_config": {
                 "temperature": 1.0,
-                "min_samples_before_bias": 5
+                "min_samples_before_bias": 5,
             }
         },
         tier=Tier.CORE,
@@ -347,16 +356,18 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
                 "mode": "distance_to_selected",
                 "temperature": 1.0,
                 "recency_window": 500,
+                "use_cumulative_penalty": False,
             },
             "loss_based_config": {
-                "temperature": 1.0
+                "temperature": 1.0,
             },
             "dino_config": {
-                "model": "dinov2_vitb14",
                 "embeddings_path": "auto",
                 "require_embeddings": True,
                 "temperature": 1.0,
+                "diversity_mode": "distance_to_selected",
                 "recency_window": 500,
+                "use_cumulative_penalty": False,
             }
         },
         tier=Tier.CORE,
@@ -368,18 +379,17 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
 
     configs["CL"] = ExperimentConfig(
         id="CL",
-        name="Clustering: K-Means",
+        name="Clustering: DBSCAN",
         strategy="clustering",
         config={
             "clustering_method": "dbscan",
-            "n_clusters": 10,
-            "temperature": 1.0,
+            "eps": 0.85,  # Neighborhood radius in standardized space
+            "min_samples": 2,
+            "temperature": 0.6,
             "use_orientation": True,
-            "update_frequency": 100,
-            "eps": 0.5,
         },
         tier=Tier.CORE,
-        description="DBSCAN clustering on camera poses, inverse cluster-size weighting"
+        description="DBSCAN clustering on camera poses, inverse cluster-size weighting (static)"
     )
 
     # ========================================================================
@@ -501,7 +511,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "weights_start": [0.5, 0.5],
             "weights_end": [0.5, 0.5],  # Constant weights
             "max_iterations": 30000,
-            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500},
+            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500, "use_cumulative_penalty": False},
             "loss_based_config": {"temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
@@ -518,7 +528,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "weights_start": [0.8, 0.2],
             "weights_end": [0.2, 0.8],
             "max_iterations": 30000,
-            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500},
+            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500, "use_cumulative_penalty": False},
             "loss_based_config": {"temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
@@ -535,11 +545,33 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "weights_start": [0.7, 0.3],
             "weights_end": [0.3, 0.7],
             "max_iterations": 30000,
-            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500},
+            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500, "use_cumulative_penalty": False},
             "loss_based_config": {"temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
         description="More geometric-heavy start [0.7,0.3]→[0.3,0.7]"
+    )
+
+    # ========================================================================
+    # NEW STRATEGIES: Sequential and Deterministic Max-Loss
+    # ========================================================================
+
+    configs["SEQ"] = ExperimentConfig(
+        id="SEQ",
+        name="Baseline: Sequential",
+        strategy="sequential",
+        config={},
+        tier=Tier.SENSITIVITY,
+        description="Deterministic sequential iteration through cameras (no randomness)"
+    )
+
+    configs["DML"] = ExperimentConfig(
+        id="DML",
+        name="Deterministic Max-Loss",
+        strategy="deterministic_max_loss",
+        config={},
+        tier=Tier.SENSITIVITY,
+        description="Always select the camera with highest current loss (expensive, deterministic)"
     )
 
     return configs
@@ -1389,9 +1421,9 @@ def main():
 
     # Handle scene/seed overrides
     scenes_tier1 = args.scenes if args.scenes else None
-    scenes_tier2 = args.scenes[:3] if args.scenes else None
+    scenes_tier2 = args.scenes if args.scenes else None
     seeds_tier1 = args.seeds if args.seeds else None
-    seeds_tier2 = args.seeds[:3] if args.seeds else None
+    seeds_tier2 = args.seeds if args.seeds else None
 
     # Initialize runner
     runner = AblationRunner(

@@ -35,7 +35,6 @@ class LossBasedSelector(ViewSelector):
 
         Args:
             config: Configuration dictionary with optional keys:
-                - ema_decay (float): EMA decay for loss tracking. Default: 0.99
                 - temperature (float): Softmax temperature. Default: 1.0
                 - min_samples_before_bias (int): Min samples before biasing. Default: 5
             log_dir: Directory to save selection logs

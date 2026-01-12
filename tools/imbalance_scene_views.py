@@ -132,7 +132,48 @@ def _split_from_train_test_lists(scene_sensor_root: Path) -> Optional[Dict[str, 
     return {"train": train, "test": test, "has_masks": bool(data.get("has_masks", False))}
 
 
-def _build_frame_index(transforms: dict) -> Dict[str, dict]:
+def _get_train_test_lists_path(scene_sensor_root: Path) -> Optional[Path]:
+    """Return the path to train_test_lists.json (or train_test_list.json) if it exists."""
+    candidates = [
+        scene_sensor_root / "train_test_lists.json",
+        scene_sensor_root / "train_test_list.json",
+    ]
+    return next((p for p in candidates if p.exists()), None)
+
+
+def _update_train_test_lists(
+    scene_sensor_root: Path,
+    dup_mappings_by_split: Dict[str, List[str]],
+) -> None:
+    """Update train_test_lists.json with duplicated image filenames.
+    
+    Args:
+        scene_sensor_root: Path to the scene's sensor folder (e.g., <scene>/dslr)
+        dup_mappings_by_split: Dict mapping split name ("train"/"test") to list of new filenames
+    """
+    path = _get_train_test_lists_path(scene_sensor_root)
+    if path is None:
+        return
+    
+    data = _load_json(path)
+    if not isinstance(data, dict):
+        return
+    
+    # Add duplicates to the appropriate split
+    for split_name, new_filenames in dup_mappings_by_split.items():
+        if split_name in data and isinstance(data[split_name], list):
+            data[split_name].extend(new_filenames)
+    
+    _write_json(path, data)
+
+
+def _build_frame_index(transforms: dict, include_test_frames: bool = True) -> Dict[str, dict]:
+    """Build an index of all frames by filename.
+    
+    Args:
+        transforms: The transforms dict containing frames and optionally test_frames
+        include_test_frames: If True, also index frames from test_frames list
+    """
     frames = transforms.get("frames", [])
     if not isinstance(frames, list):
         raise ValueError("transforms['frames'] is not a list")
@@ -145,6 +186,22 @@ def _build_frame_index(transforms: dict) -> Dict[str, dict]:
         if not fp:
             continue
         index[os.path.basename(fp)] = fr
+    
+    # Also index test_frames if present and requested
+    if include_test_frames:
+        test_frames = transforms.get("test_frames", [])
+        if isinstance(test_frames, list):
+            for fr in test_frames:
+                if not isinstance(fr, dict):
+                    continue
+                fp = fr.get("file_path")
+                if not fp:
+                    continue
+                # Don't overwrite if already in index (train takes precedence)
+                basename = os.path.basename(fp)
+                if basename not in index:
+                    index[basename] = fr
+    
     return index
 
 
@@ -662,6 +719,7 @@ def main() -> int:
     # Prepare duplicates and apply
     dup_mappings: List[Tuple[str, str]] = []  # (src_name, dst_name)
     dup_frames_by_split: Dict[str, List[dict]] = {"train": [], "test": []}
+    dup_filenames_by_split: Dict[str, List[str]] = {"train": [], "test": []}  # For train_test_lists.json
 
     dup_counter_by_src: Dict[str, int] = {d.src_file: 0 for d in dup_specs}
 
@@ -701,6 +759,7 @@ def main() -> int:
 
         dup_mappings.append((spec.src_file, dst_name))
         dup_frames_by_split[spec.split].append(new_frame)
+        dup_filenames_by_split[spec.split].append(dst_name)
 
     # Update transforms JSON with new frames
     out_transforms = _update_transforms_with_duplicates(out_transforms, dup_frames_by_split)
@@ -709,6 +768,10 @@ def main() -> int:
     # Update COLMAP extrinsics to include duplicates
     _append_colmap_duplicates(out_colmap_images_txt, dup_mappings)
 
+    # Update train_test_lists.json with duplicated filenames
+    _update_train_test_lists(out_sensor_root, dup_filenames_by_split)
+    train_test_lists_path = _get_train_test_lists_path(out_sensor_root)
+
     # Optionally update DINO features
     if args.update_dino_features:
         _try_update_dino_features(out_sensor_root, dup_mappings)
@@ -716,6 +779,8 @@ def main() -> int:
     print("Done.")
     print(f"Wrote: {out_transforms_path}")
     print(f"Updated: {out_colmap_images_txt}")
+    if train_test_lists_path:
+        print(f"Updated: {train_test_lists_path}")
     return 0
 
 

@@ -86,8 +86,7 @@ class DINOSelector(ViewSelector):
         self.temperature = self.config.get('temperature', 1.0)
         self.diversity_mode = self.config.get('diversity_mode', 'distance_to_selected')
         # Recency window: use large default to properly down-weight duplicates/similar views
-        # For 30k iterations with ~100 cameras, 500-1000 ensures redundant content stays suppressed
-        self.recency_window = self.config.get('recency_window', 500)
+        self.recency_window = self.config.get('recency_window', 69)
         self.normalize_embeddings = self.config.get('normalize_embeddings', True)
         
         # Track cumulative selection counts per camera for long-term diversity
