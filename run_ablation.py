@@ -625,6 +625,9 @@ TRAINING_DEFAULTS = {
     # that ship pre-downscaled folders (images_2/images_4/images_8)
     "images": None,
     "logger": "wandb",
+    # Random point cloud initialization (instead of COLMAP/dataset points)
+    "random_pcd": False,
+    "random_pcd_num_points": 100000,
 }
 
 
@@ -916,6 +919,12 @@ class AblationRunner:
         # If resolution hasn't been set via --images, set it now
         if not any(arg == "--resolution" for arg in cmd):
             cmd.extend(["--resolution", str(self.training_params["resolution"])])
+
+        # Random point cloud initialization
+        if self.training_params.get("random_pcd"):
+            cmd.append("--random_pcd")
+            num_points = self.training_params.get("random_pcd_num_points", 100000)
+            cmd.extend(["--random_pcd_num_points", str(num_points)])
 
         # Disk-minimal defaults:
         # - Do not write point_cloud/*.ply snapshots
@@ -1389,6 +1398,17 @@ Examples:
         action="store_true",
         help="Pass --skip_final_eval to train_gsplat.py (avoid final LPIPS eval; useful for smoke tests)"
     )
+    parser.add_argument(
+        "--random_pcd",
+        action="store_true",
+        help="Use random point cloud initialization instead of COLMAP/dataset points"
+    )
+    parser.add_argument(
+        "--random_pcd_num_points",
+        type=int,
+        default=TRAINING_DEFAULTS["random_pcd_num_points"],
+        help="Number of random points to initialize (only used with --random_pcd)"
+    )
 
     return parser.parse_args()
 
@@ -1450,6 +1470,8 @@ def main():
             "test_iterations": args.test_iterations,
             "save_iterations": args.save_iterations,
             "checkpoint_iterations": args.checkpoint_iterations,
+            "random_pcd": args.random_pcd,
+            "random_pcd_num_points": args.random_pcd_num_points,
         },
         no_save=args.no_save,
         skip_final_eval=args.skip_final_eval,
