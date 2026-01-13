@@ -385,7 +385,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "clustering_method": "dbscan",
             "eps": 0.85,  # Neighborhood radius in standardized space
             "min_samples": 2,
-            "temperature": 0.6,
+            "temperature": 1.0,
             "use_orientation": True,
         },
         tier=Tier.CORE,
@@ -628,6 +628,8 @@ TRAINING_DEFAULTS = {
     # Random point cloud initialization (instead of COLMAP/dataset points)
     "random_pcd": False,
     "random_pcd_num_points": 100000,
+    # Log full probability distribution at test iterations
+    "log_distribution_snapshots": False,
 }
 
 
@@ -925,6 +927,10 @@ class AblationRunner:
             cmd.append("--random_pcd")
             num_points = self.training_params.get("random_pcd_num_points", 100000)
             cmd.extend(["--random_pcd_num_points", str(num_points)])
+
+        # Log distribution snapshots at test iterations
+        if self.training_params.get("log_distribution_snapshots"):
+            cmd.append("--log_distribution_snapshots")
 
         # Disk-minimal defaults:
         # - Do not write point_cloud/*.ply snapshots
@@ -1409,6 +1415,11 @@ Examples:
         default=TRAINING_DEFAULTS["random_pcd_num_points"],
         help="Number of random points to initialize (only used with --random_pcd)"
     )
+    parser.add_argument(
+        "--log_distribution_snapshots",
+        action="store_true",
+        help="Log full probability distribution at each test iteration (saved to distribution_snapshots.json)"
+    )
 
     return parser.parse_args()
 
@@ -1472,6 +1483,7 @@ def main():
             "checkpoint_iterations": args.checkpoint_iterations,
             "random_pcd": args.random_pcd,
             "random_pcd_num_points": args.random_pcd_num_points,
+            "log_distribution_snapshots": args.log_distribution_snapshots,
         },
         no_save=args.no_save,
         skip_final_eval=args.skip_final_eval,

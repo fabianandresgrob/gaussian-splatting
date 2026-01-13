@@ -212,3 +212,37 @@ class DeterministicMaxLossSelector(ViewSelector):
             'max_loss': float(np.max(losses)),
             'num_cameras': len(losses),
         }
+
+    def snapshot_distribution(self, gaussians, iteration: int) -> Dict[str, float]:
+        """
+        Capture a snapshot of the LOSS distribution (not probability).
+        
+        For DML, we log the actual loss values for each view, which is more
+        informative than the one-hot probability distribution.
+        
+        Args:
+            gaussians: Current Gaussian model
+            iteration: Current training iteration
+            
+        Returns:
+            Dictionary mapping camera image_name to loss value
+        """
+        # First compute probabilities (which also computes and caches losses)
+        self.compute_probabilities(gaussians, iteration)
+        
+        # Build mapping from uid to image_name
+        uid_to_name = {cam.uid: cam.image_name for cam in self.all_cameras}
+        
+        # Convert uid-based losses to name-based
+        distribution = {
+            uid_to_name[uid]: float(loss) 
+            for uid, loss in self.last_losses.items()
+            if uid in uid_to_name
+        }
+        
+        # Store snapshot (these are losses, not probabilities!)
+        self.distribution_snapshots[iteration] = distribution
+        
+        self.logger.info(f"Captured LOSS distribution snapshot at iteration {iteration} ({len(distribution)} cameras)")
+        
+        return distribution

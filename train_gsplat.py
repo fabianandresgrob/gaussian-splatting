@@ -121,6 +121,7 @@ def training(
     disable_view_selection_logs: bool = False,
     view_selection_verbose: bool = True,
     skip_final_eval: bool = False,
+    log_distribution_snapshots: bool = False,
 ):
     print(f"positions: init={opt.position_lr_init} final={opt.position_lr_final} delay_mult={opt.position_lr_delay_mult} max_steps={opt.position_lr_max_steps}")
     print(f"feature={opt.feature_lr} opacity={opt.opacity_lr} scaling={opt.scaling_lr} rotation={opt.rotation_lr}")
@@ -389,6 +390,13 @@ def training(
                     # Save history to JSON incrementally
                     with open(os.path.join(dataset.model_path, "metrics_history.json"), "w") as f:
                         json.dump(metrics_history, f, indent=4)
+                    
+                    # Capture distribution snapshot at test iterations if enabled
+                    if log_distribution_snapshots:
+                        selector.snapshot_distribution(gaussians, iteration)
+                        # Save snapshots incrementally
+                        snapshots_path = os.path.join(dataset.model_path, "distribution_snapshots.json")
+                        selector.save_distribution_snapshots(snapshots_path)
 
                 if iteration in saving_iterations:
                     print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -655,6 +663,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--skip_final_eval", action="store_true",
                         help="Skip final eval_and_save() (useful for quick smoke tests / avoiding LPIPS OOM)")
+    parser.add_argument(
+        "--log_distribution_snapshots",
+        action="store_true",
+        help="Log full probability distribution at each test iteration (saved to distribution_snapshots.json)"
+    )
 
     args = parser.parse_args(sys.argv[1:])
     if args.no_save:
@@ -682,6 +695,7 @@ if __name__ == "__main__":
         checkpoint_on_interrupt=args.checkpoint_on_interrupt,
         disable_view_selection_logs=args.disable_view_selection_logs,
         view_selection_verbose=args.view_selection_verbose,
+        log_distribution_snapshots=args.log_distribution_snapshots,
     )
 
     print("\nTraining complete.")

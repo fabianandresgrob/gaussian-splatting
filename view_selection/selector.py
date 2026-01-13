@@ -54,6 +54,9 @@ class ViewSelector(ABC):
             self.log_file = os.path.join(self.log_dir, "selection_history.jsonl")
         else:
             self.log_file = None
+        
+        # Distribution snapshots: {iteration: {cam_name: probability}}
+        self.distribution_snapshots: Dict[int, Dict[str, float]] = {}
 
     @property
     def logger(self):
@@ -223,3 +226,62 @@ class ViewSelector(ABC):
     def log_config(self) -> None:
         """Log the selector configuration."""
         log_config(self.logger, self.config, f"{self.__class__.__name__} configuration")
+
+    def snapshot_distribution(self, gaussians, iteration: int) -> Dict[str, float]:
+        """
+        Capture the full probability distribution at a given iteration.
+        
+        Stores the snapshot internally and returns it.
+        
+        Args:
+            gaussians: Current Gaussian model
+            iteration: Current training iteration
+            
+        Returns:
+            Dictionary mapping camera image_name to probability
+        """
+        probabilities = self.compute_probabilities(gaussians, iteration)
+        
+        # Build mapping from uid to image_name
+        uid_to_name = {cam.uid: cam.image_name for cam in self.all_cameras}
+        
+        # Convert uid-based probabilities to name-based
+        distribution = {
+            uid_to_name[uid]: float(prob) 
+            for uid, prob in probabilities.items()
+            if uid in uid_to_name
+        }
+        
+        # Store snapshot
+        self.distribution_snapshots[iteration] = distribution
+        
+        self.logger.info(f"Captured distribution snapshot at iteration {iteration} ({len(distribution)} cameras)")
+        
+        return distribution
+
+    def save_distribution_snapshots(self, filepath: str) -> None:
+        """
+        Save all distribution snapshots to a JSON file.
+        
+        Args:
+            filepath: Path to save the snapshots JSON
+        """
+        # Convert int keys to strings for JSON compatibility
+        snapshots_json = {
+            str(iteration): dist 
+            for iteration, dist in self.distribution_snapshots.items()
+        }
+        
+        with open(filepath, 'w') as f:
+            json.dump(snapshots_json, f, indent=2)
+        
+        self.logger.info(f"Distribution snapshots saved to {filepath} ({len(self.distribution_snapshots)} iterations)")
+
+    def get_distribution_snapshots(self) -> Dict[int, Dict[str, float]]:
+        """
+        Get all captured distribution snapshots.
+        
+        Returns:
+            Dictionary mapping iteration to probability distribution
+        """
+        return self.distribution_snapshots.copy()
