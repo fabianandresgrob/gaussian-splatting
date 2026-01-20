@@ -129,12 +129,18 @@ def training(
     first_iter = 0
     
     # Initialize logger (TensorBoard, W&B, or none)
-    run_name = f"{view_selection_strategy}_seed{seed}"
+    # Extract scene name from source_path for better run identification
+    scene_name = os.path.basename(os.path.normpath(dataset.source_path))
+    run_name = f"{scene_name}_{view_selection_strategy}_seed{seed}"
+    
     logger_config = {
         "strategy": view_selection_strategy,
         "seed": seed,
         "iterations": opt.iterations,
         "source_path": dataset.source_path,
+        "optimizer_type": opt.optimizer_type,
+        "disable_densification": getattr(opt, 'disable_densification', False),
+        "densification_multiplier": getattr(opt, 'densification_multiplier', 1.0),
     }
     logger = Logger(
         log_dir=dataset.model_path,
@@ -403,16 +409,19 @@ def training(
                     scene.save(iteration)
 
                 # Densification
-                if iteration < opt.densify_until_iter:
+                if iteration < opt.densify_until_iter and not getattr(opt, 'disable_densification', False):
                     gaussians.max_radii2D[visibility_filter] = torch.max(
                         gaussians.max_radii2D[visibility_filter], radii[visibility_filter]
                     )
                     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
+                    # Apply densification multiplier to thresholds (>1 = less aggressive)
+                    densify_threshold = opt.densify_grad_threshold * getattr(opt, 'densification_multiplier', 1.0)
+                    
                     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                         gaussians.densify_and_prune(
-                            opt.densify_grad_threshold,
+                            densify_threshold,
                             opt.prune_alpha_threshold,
                             scene.cameras_extent,
                             size_threshold,

@@ -630,6 +630,11 @@ TRAINING_DEFAULTS = {
     "random_pcd_num_points": 100000,
     # Log full probability distribution at test iterations
     "log_distribution_snapshots": False,
+    # Optimizer type: "default" (Adam), "sparse_adam", "sgd", "sgd_no_momentum"
+    "optimizer_type": "default",
+    # Densification control for ablation studies
+    "disable_densification": False,
+    "densification_multiplier": 1.0,
 }
 
 
@@ -931,6 +936,18 @@ class AblationRunner:
         # Log distribution snapshots at test iterations
         if self.training_params.get("log_distribution_snapshots"):
             cmd.append("--log_distribution_snapshots")
+
+        # Optimizer type
+        optimizer_type = self.training_params.get("optimizer_type", "default")
+        if optimizer_type != "default":
+            cmd.extend(["--optimizer_type", optimizer_type])
+
+        # Densification control
+        if self.training_params.get("disable_densification"):
+            cmd.append("--disable_densification")
+        densification_multiplier = self.training_params.get("densification_multiplier", 1.0)
+        if densification_multiplier != 1.0:
+            cmd.extend(["--densification_multiplier", str(densification_multiplier)])
 
         # Disk-minimal defaults:
         # - Do not write point_cloud/*.ply snapshots
@@ -1421,6 +1438,26 @@ Examples:
         help="Log full probability distribution at each test iteration (saved to distribution_snapshots.json)"
     )
 
+    # Optimizer and densification ablation options
+    parser.add_argument(
+        "--optimizer_type",
+        type=str,
+        choices=["default", "sparse_adam", "sgd", "sgd_no_momentum"],
+        default=TRAINING_DEFAULTS["optimizer_type"],
+        help="Optimizer type: 'default' (Adam), 'sparse_adam', 'sgd', 'sgd_no_momentum' (default: default)"
+    )
+    parser.add_argument(
+        "--disable_densification",
+        action="store_true",
+        help="Completely disable densification and pruning during training"
+    )
+    parser.add_argument(
+        "--densification_multiplier",
+        type=float,
+        default=TRAINING_DEFAULTS["densification_multiplier"],
+        help="Multiply densification thresholds (>1 = less aggressive densification, default: 1.0)"
+    )
+
     return parser.parse_args()
 
 
@@ -1484,6 +1521,9 @@ def main():
             "random_pcd": args.random_pcd,
             "random_pcd_num_points": args.random_pcd_num_points,
             "log_distribution_snapshots": args.log_distribution_snapshots,
+            "optimizer_type": args.optimizer_type,
+            "disable_densification": args.disable_densification,
+            "densification_multiplier": args.densification_multiplier,
         },
         no_save=args.no_save,
         skip_final_eval=args.skip_final_eval,

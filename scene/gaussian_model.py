@@ -236,6 +236,16 @@ class GaussianModel:
             except:
                 # A special version of the rasterizer is required to enable sparse adam
                 self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        elif self.optimizer_type == "sgd":
+            # SGD optimizer for ablation studies
+            # Note: Learning rates may need tuning as SGD typically requires higher LRs than Adam
+            self.optimizer = torch.optim.SGD(l, lr=0.0, momentum=0.9)
+        elif self.optimizer_type == "sgd_no_momentum":
+            # Pure SGD without momentum
+            self.optimizer = torch.optim.SGD(l, lr=0.0, momentum=0.0)
+        else:
+            raise ValueError(f"Unknown optimizer_type: {self.optimizer_type}. "
+                           f"Supported: default, sparse_adam, sgd, sgd_no_momentum")
 
         self.exposure_optimizer = torch.optim.Adam([self._exposure])
 
