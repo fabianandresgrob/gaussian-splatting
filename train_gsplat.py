@@ -130,7 +130,12 @@ def training(
     
     # Initialize logger (TensorBoard, W&B, or none)
     # Extract scene name from source_path for better run identification
-    scene_name = os.path.basename(os.path.normpath(dataset.source_path))
+    # For ScanNet++ paths like .../scene_id/dslr/, we want scene_id not dslr
+    source_path_normalized = os.path.normpath(dataset.source_path)
+    scene_name = os.path.basename(source_path_normalized)
+    # If basename is a sensor name (dslr, iphone), use parent directory as scene name
+    if scene_name in ("dslr", "iphone"):
+        scene_name = os.path.basename(os.path.dirname(source_path_normalized))
     run_name = f"{scene_name}_{view_selection_strategy}_seed{seed}"
     
     logger_config = {
