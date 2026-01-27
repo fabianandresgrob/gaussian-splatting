@@ -27,11 +27,20 @@ Usage:
 """
 
 import argparse
+import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
 
 # ============================================================================
 #                              CONFIGURATION
@@ -62,7 +71,7 @@ TEST_ITERATIONS = (
 SPARSE_COUNTS = [50, 25, 10]
 
 # Imbalance configurations (percentage of train set that becomes duplicates)
-IMBALANCE_RATIOS = [30, 60, 90]
+IMBALANCE_RATIOS = [80, 90]
 
 # Densification configurations
 DENSIFICATION_CONFIGS = {
@@ -91,6 +100,9 @@ def create_sparse_scenes(
     sparse_counts: List[int],
     dry_run: bool = False,
     sensor: str = "dslr",
+    format: str = "auto",
+    llffhold: int = 8,
+    images: Optional[str] = None,
 ) -> List[str]:
     """Create sparse versions of scenes.
     
@@ -113,10 +125,15 @@ def create_sparse_scenes(
                 "--data_root", data_root,
                 "--scene_id", scene,
                 "--out_scene_id", sparse_id,
+                "--format", format,
                 "--sensor", sensor,
+                "--llffhold", str(llffhold),
                 "--keep_count", str(count),
                 "--strategy", "every_n",
             ]
+            
+            if images:
+                cmd.extend(["--images", images])
             
             print(f"\n[CREATE] Creating sparse scene: {sparse_id} ({count} views)")
             print(f"  Command: {' '.join(cmd)}")
@@ -144,6 +161,9 @@ def create_imbalanced_scenes(
     imbalance_ratios: List[int],
     dry_run: bool = False,
     sensor: str = "dslr",
+    format: str = "auto",
+    llffhold: int = 8,
+    images: Optional[str] = None,
 ) -> List[str]:
     """Create imbalanced versions of scenes by duplicating views.
     
@@ -166,10 +186,15 @@ def create_imbalanced_scenes(
                 "--data_root", data_root,
                 "--scene_id", scene,
                 "--out_scene_id", imbalanced_id,
+                "--format", format,
                 "--sensor", sensor,
+                "--llffhold", str(llffhold),
                 "--subset_fraction", str(ratio / 100.0),
-                # Let the script pick a random focus view from train set
+                "--random_focus_count", "1",  # Pick a random focus view from train set
             ]
+            
+            if images:
+                cmd.extend(["--images", images])
             
             print(f"\n[CREATE] Creating imbalanced scene: {imbalanced_id} ({ratio}% duplicates)")
             print(f"  Command: {' '.join(cmd)}")
@@ -184,6 +209,153 @@ def create_imbalanced_scenes(
                 created.append(imbalanced_id)
     
     return created
+
+
+def relog_results_to_wandb(
+    source_run_dir: str,
+    wandb_project: str,
+    run_name: str,
+    dry_run: bool = False,
+) -> bool:
+    """Re-log existing results to a new W&B project without retraining.
+    
+    Args:
+        source_run_dir: Directory containing metrics_history.json and final_results.json
+        wandb_project: Target W&B project name
+        run_name: Name for the W&B run
+        dry_run: If True, just print what would happen
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    metrics_path = os.path.join(source_run_dir, "metrics_history.json")
+    final_path = os.path.join(source_run_dir, "final_results.json")
+    metadata_path = os.path.join(source_run_dir, "run_metadata.json")
+    
+    if not os.path.exists(metrics_path):
+        print(f"  [WARN] No metrics_history.json found: {source_run_dir}")
+        return False
+    
+    if dry_run:
+        print(f"  [DRY RUN] Would re-log {run_name} to project {wandb_project}")
+        return True
+    
+    if not WANDB_AVAILABLE:
+        print(f"  [WARN] wandb not available, skipping re-log for {run_name}")
+        return False
+    
+    # Load existing data
+    with open(metrics_path, 'r') as f:
+        metrics_history = json.load(f)
+    
+    config = {}
+    if os.path.exists(metadata_path):
+        with open(metadata_path, 'r') as f:
+            config = json.load(f)
+    config["relogged"] = True
+    config["source_run_dir"] = source_run_dir
+    
+    # Initialize W&B run
+    run = wandb.init(
+        project=wandb_project,
+        name=run_name,
+        config=config,
+        reinit=True,
+    )
+    
+    # Log all metrics from history
+    for entry in metrics_history:
+        iteration = entry.get("iteration", 0)
+        log_dict = {k: v for k, v in entry.items() if k != "iteration"}
+        wandb.log(log_dict, step=iteration)
+    
+    # Log final results if available
+    if os.path.exists(final_path):
+        with open(final_path, 'r') as f:
+            final_results = json.load(f)
+        wandb.log({"final/" + k: v for k, v in final_results.items()})
+    
+    wandb.finish()
+    print(f"  [RELOGGED] {run_name} -> {wandb_project}")
+    return True
+
+
+def copy_and_relog_baseline(
+    source_baseline_dir: str,
+    target_output_dir: str,
+    wandb_project: str,
+    scenes: List[str],
+    configs: List[str],
+    seed: int,
+    dry_run: bool = False,
+) -> bool:
+    """Copy baseline results and re-log to a new W&B project.
+    
+    Args:
+        source_baseline_dir: Directory containing existing baseline runs (e.g., sparse_baseline_original)
+        target_output_dir: Where to copy the results (e.g., densification_baseline)
+        wandb_project: Target W&B project name
+        scenes: List of scene IDs to look for
+        configs: List of config IDs (B1, B2, etc.)
+        seed: Random seed used
+        dry_run: If True, just print what would happen
+        
+    Returns:
+        True if all runs were successfully copied and re-logged
+    """
+    if not os.path.exists(source_baseline_dir):
+        print(f"  [WARN] Source baseline dir not found: {source_baseline_dir}")
+        return False
+    
+    success = True
+    relogged_count = 0
+    
+    for config_id in configs:
+        for scene in scenes:
+            # Source path: source_baseline_dir/CONFIG/SCENE/seed_N/
+            source_run = os.path.join(source_baseline_dir, config_id, scene, f"seed_{seed}")
+            target_run = os.path.join(target_output_dir, config_id, scene, f"seed_{seed}")
+            
+            # Check if source exists
+            final_results = os.path.join(source_run, "final_results.json")
+            if not os.path.exists(final_results):
+                print(f"  [SKIP] Source not complete: {source_run}")
+                continue
+            
+            # Check if target already exists and is complete
+            target_final = os.path.join(target_run, "final_results.json")
+            if os.path.exists(target_final):
+                print(f"  [SKIP] Target already exists: {target_run}")
+                continue
+            
+            # Extract scene name for run naming (handle sensor suffix)
+            scene_name = scene
+            if scene_name in ("dslr", "iphone"):
+                scene_name = os.path.basename(os.path.dirname(scene))
+            
+            run_name = f"{scene_name}_{config_id.lower()}_seed{seed}"
+            
+            if dry_run:
+                print(f"  [DRY RUN] Would copy {source_run} -> {target_run}")
+                print(f"  [DRY RUN] Would re-log as {run_name} to {wandb_project}")
+                relogged_count += 1
+                continue
+            
+            # Copy the run directory
+            print(f"  [COPY] {source_run} -> {target_run}")
+            os.makedirs(os.path.dirname(target_run), exist_ok=True)
+            if os.path.exists(target_run):
+                shutil.rmtree(target_run)
+            shutil.copytree(source_run, target_run)
+            
+            # Re-log to W&B
+            if relog_results_to_wandb(target_run, wandb_project, run_name, dry_run=False):
+                relogged_count += 1
+            else:
+                success = False
+    
+    print(f"  [SUMMARY] Re-logged {relogged_count} runs to {wandb_project}")
+    return success
 
 
 def run_ablation(
@@ -201,6 +373,9 @@ def run_ablation(
     densification_multiplier: float = 1.0,
     dry_run: bool = False,
     extra_args: Optional[List[str]] = None,
+    resolution: int = 2,
+    images: Optional[str] = None,
+    data_device: str = "cpu",
 ) -> int:
     """Run a single ablation experiment.
     
@@ -219,7 +394,12 @@ def run_ablation(
         "--test_iterations", *[str(i) for i in test_iterations],
         "--wandb_project", wandb_project,
         "--optimizer_type", optimizer_type,
+        "--resolution", str(resolution),
+        "--data_device", data_device,
     ]
+    
+    if images:
+        cmd.extend(["--images", images])
     
     if disable_densification:
         cmd.append("--disable_densification")
@@ -239,6 +419,8 @@ def run_ablation(
     print(f"  Scenes: {', '.join(scenes)}")
     print(f"  Configs: {', '.join(configs)}")
     print(f"  Iterations: {iterations}")
+    print(f"  Resolution: {resolution} (images: {images or 'default'})")
+    print(f"  Data device: {data_device}")
     print(f"  Optimizer: {optimizer_type}")
     print(f"  Densification: {'disabled' if disable_densification else f'enabled (multiplier={densification_multiplier})'}")
     print(f"  Output: {output_dir}")
@@ -266,6 +448,12 @@ def run_sparse_ablation(
     create_scenes_only: bool = False,
     sensor: str = "dslr",
     extra_args: Optional[List[str]] = None,
+    shared_baseline_dir: Optional[str] = None,
+    format: str = "auto",
+    llffhold: int = 8,
+    resolution: int = 2,
+    images: Optional[str] = None,
+    data_device: str = "cpu",
 ):
     """Run sparse view ablation suite.
     
@@ -277,6 +465,7 @@ def run_sparse_ablation(
     print("="*80)
     print(f"Testing sparse counts: {sparse_counts}")
     print(f"Original scenes: {scenes}")
+    print(f"Format: {format}")
     
     # Step 1: Create sparse scenes
     print("\n--- Creating sparse scenes ---")
@@ -286,6 +475,9 @@ def run_sparse_ablation(
         sparse_counts=sparse_counts,
         dry_run=dry_run,
         sensor=sensor,
+        format=format,
+        llffhold=llffhold,
+        images=images,
     )
     
     if create_scenes_only:
@@ -293,6 +485,8 @@ def run_sparse_ablation(
         return
     
     # Step 2: Run ablation on original scenes (baseline)
+    # This is the canonical baseline - other suites will copy from here
+    baseline_output = os.path.join(output_root, "sparse_baseline_original")
     print("\n--- Running baseline (original scenes) ---")
     run_ablation(
         data_root=data_root,
@@ -306,6 +500,9 @@ def run_sparse_ablation(
         ablation_name="sparse_baseline_original",
         dry_run=dry_run,
         extra_args=extra_args,
+        resolution=resolution,
+        images=images,
+        data_device=data_device,
     )
     
     # Step 3: Run ablation on each sparse level
@@ -331,6 +528,9 @@ def run_sparse_ablation(
             ablation_name=f"sparse_{count}_views",
             dry_run=dry_run,
             extra_args=extra_args,
+            resolution=resolution,
+            images=images,
+            data_device=data_device,
         )
 
 
@@ -344,6 +544,10 @@ def run_densification_ablation(
     test_iterations: List[int],
     dry_run: bool = False,
     extra_args: Optional[List[str]] = None,
+    shared_baseline_dir: Optional[str] = None,
+    resolution: int = 2,
+    images: Optional[str] = None,
+    data_device: str = "cpu",
 ):
     """Run densification ablation suite.
     
@@ -356,6 +560,24 @@ def run_densification_ablation(
     print(f"Testing densification configs: {list(DENSIFICATION_CONFIGS.keys())}")
     
     for config_name, config in DENSIFICATION_CONFIGS.items():
+        target_dir = os.path.join(output_root, f"densification_{config_name}")
+        
+        # For 'baseline' config, try to reuse shared baseline if available
+        if config_name == "baseline" and shared_baseline_dir:
+            print(f"\n--- Re-logging densification_baseline from shared baseline ---")
+            success = copy_and_relog_baseline(
+                source_baseline_dir=shared_baseline_dir,
+                target_output_dir=target_dir,
+                wandb_project="3dgs-densification-ablation",
+                scenes=scenes,
+                configs=configs,
+                seed=seed,
+                dry_run=dry_run,
+            )
+            if success:
+                continue
+            print("  [FALLBACK] Shared baseline not fully available, running training...")
+        
         print(f"\n--- Running densification_{config_name} ---")
         run_ablation(
             data_root=data_root,
@@ -371,6 +593,9 @@ def run_densification_ablation(
             densification_multiplier=config["multiplier"],
             dry_run=dry_run,
             extra_args=extra_args,
+            resolution=resolution,
+            images=images,
+            data_device=data_device,
         )
 
 
@@ -385,6 +610,10 @@ def run_optimizer_ablation(
     optimizer_configs: List[str],
     dry_run: bool = False,
     extra_args: Optional[List[str]] = None,
+    shared_baseline_dir: Optional[str] = None,
+    resolution: int = 2,
+    images: Optional[str] = None,
+    data_device: str = "cpu",
 ):
     """Run optimizer ablation suite.
     
@@ -397,6 +626,24 @@ def run_optimizer_ablation(
     print(f"Testing optimizers: {optimizer_configs}")
     
     for optimizer in optimizer_configs:
+        target_dir = os.path.join(output_root, f"optimizer_{optimizer}")
+        
+        # For 'default' optimizer (Adam), try to reuse shared baseline if available
+        if optimizer == "default" and shared_baseline_dir:
+            print(f"\n--- Re-logging optimizer_default from shared baseline ---")
+            success = copy_and_relog_baseline(
+                source_baseline_dir=shared_baseline_dir,
+                target_output_dir=target_dir,
+                wandb_project="3dgs-optimizer-ablation",
+                scenes=scenes,
+                configs=configs,
+                seed=seed,
+                dry_run=dry_run,
+            )
+            if success:
+                continue
+            print("  [FALLBACK] Shared baseline not fully available, running training...")
+        
         print(f"\n--- Running optimizer_{optimizer} ---")
         run_ablation(
             data_root=data_root,
@@ -411,6 +658,9 @@ def run_optimizer_ablation(
             optimizer_type=optimizer,
             dry_run=dry_run,
             extra_args=extra_args,
+            resolution=resolution,
+            images=images,
+            data_device=data_device,
         )
 
 
@@ -427,6 +677,12 @@ def run_imbalance_ablation(
     create_scenes_only: bool = False,
     sensor: str = "dslr",
     extra_args: Optional[List[str]] = None,
+    shared_baseline_dir: Optional[str] = None,
+    format: str = "auto",
+    llffhold: int = 8,
+    resolution: int = 2,
+    images: Optional[str] = None,
+    data_device: str = "cpu",
 ):
     """Run imbalance ablation suite.
     
@@ -438,6 +694,7 @@ def run_imbalance_ablation(
     print("="*80)
     print(f"Testing imbalance ratios: {imbalance_ratios}%")
     print(f"Original scenes: {scenes}")
+    print(f"Format: {format}")
     
     # Step 1: Create imbalanced scenes
     print("\n--- Creating imbalanced scenes ---")
@@ -447,6 +704,9 @@ def run_imbalance_ablation(
         imbalance_ratios=imbalance_ratios,
         dry_run=dry_run,
         sensor=sensor,
+        format=format,
+        llffhold=llffhold,
+        images=images,
     )
     
     if create_scenes_only:
@@ -454,20 +714,56 @@ def run_imbalance_ablation(
         return
     
     # Step 2: Run ablation on original scenes (baseline)
-    print("\n--- Running baseline (original scenes) ---")
-    run_ablation(
-        data_root=data_root,
-        output_root=output_root,
-        scenes=scenes,
-        configs=configs,
-        seed=seed,
-        iterations=iterations,
-        test_iterations=test_iterations,
-        wandb_project="3dgs-imbalance-ablation",
-        ablation_name="imbalance_baseline_original",
-        dry_run=dry_run,
-        extra_args=extra_args,
-    )
+    target_dir = os.path.join(output_root, "imbalance_baseline_original")
+    
+    # Try to reuse shared baseline if available
+    if shared_baseline_dir:
+        print("\n--- Re-logging imbalance_baseline_original from shared baseline ---")
+        success = copy_and_relog_baseline(
+            source_baseline_dir=shared_baseline_dir,
+            target_output_dir=target_dir,
+            wandb_project="3dgs-imbalance-ablation",
+            scenes=scenes,
+            configs=configs,
+            seed=seed,
+            dry_run=dry_run,
+        )
+        if not success:
+            print("  [FALLBACK] Shared baseline not fully available, running training...")
+            run_ablation(
+                data_root=data_root,
+                output_root=output_root,
+                scenes=scenes,
+                configs=configs,
+                seed=seed,
+                iterations=iterations,
+                test_iterations=test_iterations,
+                wandb_project="3dgs-imbalance-ablation",
+                ablation_name="imbalance_baseline_original",
+                dry_run=dry_run,
+                extra_args=extra_args,
+                resolution=resolution,
+                images=images,
+                data_device=data_device,
+            )
+    else:
+        print("\n--- Running baseline (original scenes) ---")
+        run_ablation(
+            data_root=data_root,
+            output_root=output_root,
+            scenes=scenes,
+            configs=configs,
+            seed=seed,
+            iterations=iterations,
+            test_iterations=test_iterations,
+            wandb_project="3dgs-imbalance-ablation",
+            ablation_name="imbalance_baseline_original",
+            dry_run=dry_run,
+            extra_args=extra_args,
+            resolution=resolution,
+            images=images,
+            data_device=data_device,
+        )
     
     # Step 3: Run ablation on each imbalance level
     for ratio in imbalance_ratios:
@@ -492,6 +788,9 @@ def run_imbalance_ablation(
             ablation_name=f"imbalanced_{ratio}pct",
             dry_run=dry_run,
             extra_args=extra_args,
+            resolution=resolution,
+            images=images,
+            data_device=data_device,
         )
 
 
@@ -559,6 +858,17 @@ Ablation Suites:
                         help="Only create sparse scenes, don't run ablations")
     parser.add_argument("--sensor", type=str, default="dslr",
                         help="Sensor subfolder for ScanNet++ scenes (default: dslr)")
+    parser.add_argument("--format", type=str, choices=["auto", "scannetpp", "colmap"], default="auto",
+                        help="Dataset format: auto (detect), scannetpp, or colmap/MipNeRF-360 (default: auto)")
+    parser.add_argument("--llffhold", type=int, default=8,
+                        help="LLFF-hold value for COLMAP format (every Nth for test, default: 8)")
+    parser.add_argument("--resolution", type=int, default=2,
+                        help="Training resolution: -1 (auto), 1 (full), 2 (half), 4 (quarter). Default: 2")
+    parser.add_argument("--images", type=str, default=None,
+                        help="Images subfolder for COLMAP datasets (e.g., images_4 for pre-downscaled). "
+                             "When set, --resolution is forced to 1.")
+    parser.add_argument("--data_device", type=str, default="cpu", choices=["cpu", "cuda"],
+                        help="Device for image data: cpu (memory-efficient) or cuda (faster). Default: cpu")
     
     # Optimizer-specific options  
     parser.add_argument("--optimizers", type=str, nargs="+", default=OPTIMIZER_CONFIGS,
@@ -570,11 +880,28 @@ Ablation Suites:
     parser.add_argument("--no_resume", action="store_true",
                         help="Don't skip already completed runs")
     
+    # Shared baseline options
+    parser.add_argument("--shared_baseline_dir", type=str, default=None,
+                        help="Path to existing baseline results to reuse (e.g., output_root/sparse_baseline_original). "
+                             "If set, other suites will copy+re-log these results instead of retraining.")
+    
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    
+    # Validate image/resolution combinations
+    if args.images:
+        # When using pre-downscaled images (images_2, images_4, images_8), force resolution=1
+        if args.resolution != 1:
+            print(f"[NOTE] --images {args.images} specified; forcing --resolution 1 to avoid double-downscaling.")
+            args.resolution = 1
+        
+        # Validate images folder name
+        valid_images_folders = ["images", "images_2", "images_4", "images_8"]
+        if args.images not in valid_images_folders:
+            print(f"[WARN] Non-standard images folder '{args.images}'. Expected one of: {valid_images_folders}")
     
     # Determine which suites to run
     suites = args.suite
@@ -589,6 +916,17 @@ def main():
     # Build test iterations
     test_iterations = TEST_ITERATIONS
     
+    # Determine shared baseline directory
+    # By default, use sparse_baseline_original from output_root if it exists
+    shared_baseline_dir = args.shared_baseline_dir
+    if shared_baseline_dir is None:
+        default_baseline = os.path.join(args.output_root, "sparse_baseline_original")
+        if os.path.exists(default_baseline):
+            shared_baseline_dir = default_baseline
+            print(f"Using shared baseline: {shared_baseline_dir}")
+    elif shared_baseline_dir:
+        print(f"Using shared baseline: {shared_baseline_dir}")
+    
     print("="*80)
     print("3DGS VIEW SELECTION ABLATION SUITE")
     print("="*80)
@@ -601,8 +939,11 @@ def main():
     print(f"Test iterations: {len(test_iterations)} checkpoints")
     print(f"  First 10: {test_iterations[:10]}")
     print(f"  Last 10: {test_iterations[-10:]}")
+    print(f"Resolution: {args.resolution} (images: {args.images or 'default'})")
+    print(f"Data device: {args.data_device}")
     print(f"Data root: {args.data_root}")
     print(f"Output root: {args.output_root}")
+    print(f"Shared baseline: {shared_baseline_dir or 'None (will train baselines)'}")
     print(f"Dry run: {args.dry_run}")
     print("="*80)
     
@@ -621,7 +962,18 @@ def main():
             create_scenes_only=args.create_scenes_only,
             sensor=args.sensor,
             extra_args=extra_args,
+            shared_baseline_dir=shared_baseline_dir,
+            format=args.format,
+            llffhold=args.llffhold,
+            resolution=args.resolution,
+            images=args.images,
+            data_device=args.data_device,
         )
+        # After sparse runs, update shared_baseline_dir to point to the new baseline
+        if shared_baseline_dir is None:
+            new_baseline = os.path.join(args.output_root, "sparse_baseline_original")
+            if os.path.exists(new_baseline) or args.dry_run:
+                shared_baseline_dir = new_baseline
     
     if "imbalance" in suites:
         run_imbalance_ablation(
@@ -637,6 +989,12 @@ def main():
             create_scenes_only=args.create_scenes_only,
             sensor=args.sensor,
             extra_args=extra_args,
+            shared_baseline_dir=shared_baseline_dir,
+            format=args.format,
+            llffhold=args.llffhold,
+            resolution=args.resolution,
+            images=args.images,
+            data_device=args.data_device,
         )
     
     if "densification" in suites and not args.create_scenes_only:
@@ -650,6 +1008,10 @@ def main():
             test_iterations=test_iterations,
             dry_run=args.dry_run,
             extra_args=extra_args,
+            shared_baseline_dir=shared_baseline_dir,
+            resolution=args.resolution,
+            images=args.images,
+            data_device=args.data_device,
         )
     
     if "optimizer" in suites and not args.create_scenes_only:
@@ -664,6 +1026,10 @@ def main():
             optimizer_configs=args.optimizers,
             dry_run=args.dry_run,
             extra_args=extra_args,
+            shared_baseline_dir=shared_baseline_dir,
+            resolution=args.resolution,
+            images=args.images,
+            data_device=args.data_device,
         )
     
     print("\n" + "="*80)

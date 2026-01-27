@@ -163,33 +163,45 @@ def load_model_and_processor(
     return model, processor
 
 
-def get_scene_images(scene_path: Path) -> List[Path]:
+def get_scene_images(scene_path: Path, images_folder: Optional[str] = None) -> List[Path]:
     """
     Get all image paths for a scene.
     
     Args:
         scene_path: Path to scene directory
+        images_folder: Specific images folder to use (e.g., 'images_4' for downscaled).
+                      If None, auto-detect in order of preference.
         
     Returns:
         Sorted list of image paths
     """
-    image_dir = scene_path / 'dslr' / 'resized_undistorted_images'
-    
-    if not image_dir.exists():
-        # Try alternative paths
-        alt_paths = [
-            scene_path / 'dslr' / 'undistorted_images',
-            scene_path / 'images',
-        ]
-        for alt in alt_paths:
-            if alt.exists():
-                image_dir = alt
-                break
-        else:
-            raise FileNotFoundError(
-                f"Could not find image directory in {scene_path}. "
-                f"Tried: resized_undistorted_images, undistorted_images, images"
-            )
+    # If specific folder requested, use it
+    if images_folder:
+        image_dir = scene_path / images_folder
+        if not image_dir.exists():
+            # Also try under dslr/ for ScanNet++ format
+            image_dir = scene_path / 'dslr' / images_folder
+        if not image_dir.exists():
+            raise FileNotFoundError(f"Requested image folder not found: {images_folder} in {scene_path}")
+    else:
+        # Auto-detect image folder
+        image_dir = scene_path / 'dslr' / 'resized_undistorted_images'
+        
+        if not image_dir.exists():
+            # Try alternative paths
+            alt_paths = [
+                scene_path / 'dslr' / 'undistorted_images',
+                scene_path / 'images',
+            ]
+            for alt in alt_paths:
+                if alt.exists():
+                    image_dir = alt
+                    break
+            else:
+                raise FileNotFoundError(
+                    f"Could not find image directory in {scene_path}. "
+                    f"Tried: resized_undistorted_images, undistorted_images, images"
+                )
     
     # Find all JPG/PNG images
     patterns = ['*.JPG', '*.jpg', '*.jpeg', '*.PNG', '*.png']
@@ -212,6 +224,7 @@ def extract_features_for_scene(
     device: torch.device,
     batch_size: int = 8,
     model_name: str = DEFAULT_MODEL,
+    images_folder: Optional[str] = None,
 ) -> Dict[str, torch.Tensor]:
     """
     Extract DINOv3 features for all images in a scene.
@@ -223,12 +236,13 @@ def extract_features_for_scene(
         device: Device to run inference on
         batch_size: Batch size for inference
         model_name: Name of model (for metadata)
+        images_folder: Specific images folder to use (e.g., 'images_4')
         
     Returns:
         Dictionary mapping image names to feature tensors
     """
-    images = get_scene_images(scene_path)
-    print(f"  Found {len(images)} images")
+    images = get_scene_images(scene_path, images_folder)
+    print(f"  Found {len(images)} images in {images[0].parent if images else 'unknown'}")
     
     features = {}
     embedding_dim = None
@@ -371,6 +385,12 @@ def main():
         help='Name of output file (default: features.pt)'
     )
     parser.add_argument(
+        '--images',
+        type=str,
+        default=None,
+        help='Images folder to use (e.g., images_4 for pre-downscaled). Default: auto-detect'
+    )
+    parser.add_argument(
         '--device',
         type=str,
         default='cuda' if torch.cuda.is_available() else 'cpu',
@@ -445,6 +465,7 @@ def main():
                 device=device,
                 batch_size=args.batch_size,
                 model_name=args.model,
+                images_folder=args.images,
             )
             
             save_features(features, output_path)

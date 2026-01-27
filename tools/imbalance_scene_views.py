@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Create an imbalanced copy of a ScanNet++-style scene by duplicating view(s).
+"""Create an imbalanced copy of a scene by duplicating view(s).
+
+Supports two dataset formats:
+  - ScanNet++: <scene>/<sensor>/nerfstudio/transforms_undistorted.json
+  - MipNeRF-360 / COLMAP: <scene>/sparse/0/ + <scene>/images/
 
 Motivation
 ----------
@@ -8,37 +12,43 @@ without changing any poses/metadata. This script:
 
 1) Copies a scene (so the original data is never modified)
 2) Duplicates one or more existing views (image + mask)
-3) Updates the nerfstudio transforms JSON and COLMAP `images.txt` so the new views are
+3) Updates the nerfstudio transforms JSON and COLMAP `images.txt`/`images.bin` so the new views are
    treated as valid cameras (same extrinsics, new filenames)
 4) (Optional) Updates DINO `features.pt` so selectors that rely on embeddings keep working
 
-This is intended for the ScanNet++ layout used by this repo:
+ScanNet++ layout:
   <data_root>/<scene_id>/dslr/
     nerfstudio/transforms_undistorted.json
     resized_undistorted_images/<filename>.JPG
     resized_undistorted_masks/<filename>.png
     colmap/images.txt
 
+MipNeRF-360 / COLMAP layout:
+  <data_root>/<scene_id>/
+    images/<filename>.JPG
+    sparse/0/images.bin, cameras.bin, points3D.bin
+
 Examples
 --------
-Duplicate one training image until it accounts for ~30% of all train views:
+ScanNet++ - Duplicate one training image until it accounts for ~30% of all train views:
 
   python tools/imbalance_scene_views.py \
-    --data_root /home/fgrob/data/scenes/data \
+    --data_root /path/to/scannetpp \
     --scene_id test_scene \
     --out_scene_id test_scene_imb_30 \
     --sensor dslr \
     --subset_fraction 0.30 \
     --focus DSC03721.JPG
 
-Duplicate a small set of 3 views until they account for ~40% (distributed round-robin):
+MipNeRF-360 - Duplicate random training views until 80% imbalanced:
 
   python tools/imbalance_scene_views.py \
-    --data_root /home/fgrob/data/scenes/data \
-    --scene_id test_scene \
-    --out_scene_id test_scene_imb_40_3 \
-    --subset_fraction 0.40 \
-    --focus DSC03721.JPG DSC03722.JPG DSC03723.JPG
+    --data_root /path/to/mipnerf360 \
+    --scene_id bicycle \
+    --out_scene_id bicycle_imb_80 \
+    --format colmap \
+    --subset_fraction 0.80 \
+    --random_focus_count 1
 
 Notes
 -----
@@ -56,16 +66,104 @@ import json
 import math
 import os
 import shutil
+import struct
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 try:
     import numpy as np  # type: ignore
 except Exception:  # pragma: no cover
     np = None
 
+
+# ============================================================================
+#                          FORMAT DETECTION
+# ============================================================================
+
+def detect_format(scene_root: Path, sensor: str = "dslr") -> str:
+    """Detect the dataset format based on directory structure.
+    
+    Returns:
+        'scannetpp' if ScanNet++ format is detected
+        'colmap' if MipNeRF-360/COLMAP format is detected
+    """
+    # Check for ScanNet++ structure: <scene>/<sensor>/nerfstudio/
+    scannetpp_path = scene_root / sensor / "nerfstudio"
+    if scannetpp_path.exists():
+        return "scannetpp"
+    
+    # Check for COLMAP structure: <scene>/sparse/0/
+    colmap_path = scene_root / "sparse" / "0"
+    if colmap_path.exists():
+        return "colmap"
+    
+    raise ValueError(
+        f"Could not detect dataset format for {scene_root}. "
+        f"Expected either {scannetpp_path} or {colmap_path} to exist."
+    )
+
+
+def _read_colmap_images_bin(path: Path) -> Dict[int, dict]:
+    """Read COLMAP images.bin file."""
+    images = {}
+    with open(path, "rb") as f:
+        num_images = struct.unpack("Q", f.read(8))[0]
+        for _ in range(num_images):
+            image_id = struct.unpack("I", f.read(4))[0]
+            qw, qx, qy, qz = struct.unpack("dddd", f.read(32))
+            tx, ty, tz = struct.unpack("ddd", f.read(24))
+            camera_id = struct.unpack("I", f.read(4))[0]
+            
+            # Read image name (null-terminated string)
+            name_chars = []
+            while True:
+                c = f.read(1)
+                if c == b"\x00":
+                    break
+                name_chars.append(c.decode("utf-8"))
+            name = "".join(name_chars)
+            
+            # Read 2D points (skip them)
+            num_points2d = struct.unpack("Q", f.read(8))[0]
+            f.read(24 * num_points2d)  # x, y, point3d_id per point
+            
+            images[image_id] = {
+                "id": image_id,
+                "name": name,
+                "qvec": (qw, qx, qy, qz),
+                "tvec": (tx, ty, tz),
+                "camera_id": camera_id,
+            }
+    
+    return images
+
+
+def _write_colmap_images_bin(path: Path, images: Dict[int, dict]) -> None:
+    """Write COLMAP images.bin file."""
+    with open(path, "wb") as f:
+        f.write(struct.pack("Q", len(images)))
+        for image_id, img in images.items():
+            f.write(struct.pack("I", img["id"]))
+            f.write(struct.pack("dddd", *img["qvec"]))
+            f.write(struct.pack("ddd", *img["tvec"]))
+            f.write(struct.pack("I", img["camera_id"]))
+            f.write(img["name"].encode("utf-8") + b"\x00")
+            f.write(struct.pack("Q", 0))  # No 2D points
+
+
+def _get_colmap_train_test_split(all_names: List[str], llffhold: int = 8) -> Dict[str, List[str]]:
+    """Split images using LLFF-hold convention (every Nth image for test)."""
+    sorted_names = sorted(all_names)
+    test_names = [name for i, name in enumerate(sorted_names) if i % llffhold == 0]
+    train_names = [name for i, name in enumerate(sorted_names) if i % llffhold != 0]
+    return {"train": train_names, "test": test_names}
+
+
+# ============================================================================
+#                          DATA CLASSES
+# ============================================================================
 
 @dataclass(frozen=True)
 class DupSpec:
@@ -472,16 +570,201 @@ def _try_update_dino_features(scene_sensor_root: Path, mappings: List[Tuple[str,
         print(f"Updated DINO features: added {added} embeddings -> {features_path}")
 
 
+# ============================================================================
+#                          COLMAP / MIPNERF-360 IMBALANCING
+# ============================================================================
+
+def _imbalance_colmap_scene(args, in_scene_root: Path, out_scene_root: Path) -> int:
+    """Imbalance a COLMAP/MipNeRF-360 format scene by duplicating views."""
+    import random
+    
+    # Validate input paths
+    colmap_dir = in_scene_root / "sparse" / "0"
+    images_bin = colmap_dir / "images.bin"
+    images_dir = in_scene_root / "images"
+    
+    if not colmap_dir.exists():
+        raise FileNotFoundError(f"COLMAP sparse folder not found: {colmap_dir}")
+    if not images_bin.exists():
+        raise FileNotFoundError(f"COLMAP images.bin not found: {images_bin}")
+    if not images_dir.exists():
+        raise FileNotFoundError(f"Images folder not found: {images_dir}")
+    
+    # Read COLMAP images.bin
+    images_dict = _read_colmap_images_bin(images_bin)
+    all_names = [img["name"] for img in images_dict.values()]
+    
+    # Get train/test split using LLFF-hold convention
+    split = _get_colmap_train_test_split(all_names, llffhold=args.llffhold)
+    train_files = sorted(split["train"])
+    test_files = sorted(split["test"])
+    
+    n_train_original = len(train_files)
+    n_test = len(test_files)
+    
+    # Determine focus views
+    focus = _normalize_focus_names(args.focus) if args.focus else []
+    
+    if args.random_focus_count is not None:
+        random.seed(args.random_seed)
+        n_pick = min(args.random_focus_count, len(train_files))
+        focus = random.sample(train_files, n_pick)
+        print(f"Randomly selected {len(focus)} focus view(s) from train split: {focus[:5]}{'...' if len(focus) > 5 else ''}")
+    
+    if not focus:
+        # Default: pick one random training view
+        random.seed(args.random_seed)
+        focus = random.sample(train_files, 1)
+        print(f"No focus specified; randomly selected: {focus}")
+    
+    # Validate focus views are in train set
+    focus_set = set(focus)
+    invalid = focus_set - set(train_files)
+    if invalid:
+        raise ValueError(f"Focus view(s) not in training set: {invalid}")
+    
+    # Calculate duplicates needed
+    subset_fraction = args.subset_fraction
+    if not (0.0 < subset_fraction < 1.0):
+        raise ValueError("--subset_fraction must be between 0 and 1 (exclusive)")
+    
+    # After imbalancing: focus_count + n_dups = subset_fraction * (n_train + n_dups)
+    # => n_dups = (subset_fraction * n_train - focus_count) / (1 - subset_fraction)
+    focus_count = len(focus)
+    n_dups_needed = math.ceil((subset_fraction * n_train_original - focus_count) / (1 - subset_fraction))
+    n_dups_needed = max(0, n_dups_needed)
+    
+    if n_dups_needed == 0:
+        print(f"[WARN] Focus views already exceed target fraction; no duplicates needed.")
+        return 0
+    
+    # Distribute duplicates round-robin across focus views
+    dup_list: List[Tuple[str, str]] = []
+    for i in range(n_dups_needed):
+        src = focus[i % len(focus)]
+        src_stem = Path(src).stem
+        src_ext = Path(src).suffix
+        dst_name = f"{src_stem}_dup{i+1}{src_ext}"
+        dup_list.append((src, dst_name))
+    
+    n_final_train = n_train_original + n_dups_needed
+    achieved_fraction = (focus_count + n_dups_needed) / n_final_train
+    
+    print(f"Input:  {in_scene_root}")
+    print(f"Output: {out_scene_root}")
+    print(f"Original train views: {n_train_original}")
+    print(f"Test views (preserved): {n_test}")
+    print(f"LLFF-hold: {args.llffhold}")
+    print(f"Focus views: {focus_count} ({focus[:3]}{'...' if len(focus) > 3 else ''})")
+    print(f"Duplicates to add: {n_dups_needed}")
+    print(f"Final train views: {n_final_train}")
+    print(f"Achieved imbalance: {achieved_fraction:.1%}")
+    
+    if args.dry_run:
+        print("\nDry run: no files written.")
+        print(f"\nFirst 10 duplicates would be:")
+        for src, dst in dup_list[:10]:
+            print(f"  {src} -> {dst}")
+        if len(dup_list) > 10:
+            print(f"  ... and {len(dup_list) - 10} more")
+        return 0
+    
+    # Check if output exists
+    if out_scene_root.exists():
+        if not args.overwrite:
+            raise FileExistsError(f"Output scene already exists: {out_scene_root} (use --overwrite)")
+        shutil.rmtree(out_scene_root)
+    
+    # Determine which image folders to copy
+    all_image_folders = ["images", "images_2", "images_4", "images_8"]
+    images_arg = getattr(args, 'images', None)
+    if images_arg:
+        # Only copy the specified folder
+        if not (in_scene_root / images_arg).exists():
+            raise FileNotFoundError(f"Specified images folder not found: {in_scene_root / images_arg}")
+        image_folders_to_copy = [images_arg]
+        print(f"Images folder: {images_arg} (only)")
+    else:
+        # Copy all existing image folders
+        image_folders_to_copy = [f for f in all_image_folders if (in_scene_root / f).exists()]
+        print(f"Images folders: {image_folders_to_copy}")
+    
+    # Selective copy: copy structure but skip unwanted image folders
+    print(f"\nCopying {in_scene_root} -> {out_scene_root}")
+    os.makedirs(out_scene_root, exist_ok=True)
+    
+    for item in in_scene_root.iterdir():
+        src = in_scene_root / item.name
+        dst = out_scene_root / item.name
+        
+        # Skip image folders we don't want
+        if item.name in all_image_folders and item.name not in image_folders_to_copy:
+            continue
+        
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+    
+    # Copy duplicate images to the selected image folders only
+    for folder_name in image_folders_to_copy:
+        out_images_dir = out_scene_root / folder_name
+        if out_images_dir.exists():
+            dups_created = 0
+            for src_name, dst_name in dup_list:
+                src_path = out_images_dir / src_name
+                dst_path = out_images_dir / dst_name
+                if src_path.exists():
+                    shutil.copy2(src_path, dst_path)
+                    dups_created += 1
+            if dups_created > 0:
+                print(f"Created {dups_created} duplicate images in {out_images_dir}")
+    
+    # Update COLMAP images.bin
+    out_images_bin = out_scene_root / "sparse" / "0" / "images.bin"
+    max_id = max(images_dict.keys())
+    
+    # Add duplicate entries
+    new_images_dict = dict(images_dict)
+    for i, (src_name, dst_name) in enumerate(dup_list):
+        # Find source image entry
+        src_entry = next((img for img in images_dict.values() if img["name"] == src_name), None)
+        if src_entry is None:
+            print(f"[WARN] Could not find COLMAP entry for {src_name}, skipping")
+            continue
+        
+        new_id = max_id + i + 1
+        new_images_dict[new_id] = {
+            "id": new_id,
+            "name": dst_name,
+            "qvec": src_entry["qvec"],
+            "tvec": src_entry["tvec"],
+            "camera_id": src_entry["camera_id"],
+        }
+    
+    _write_colmap_images_bin(out_images_bin, new_images_dict)
+    print(f"Updated: {out_images_bin} ({len(new_images_dict)} images)")
+    
+    # Update DINO features if present (always, to keep consistency)
+    dino_dir = out_scene_root / "dino_features"
+    if dino_dir.exists():
+        _try_update_dino_features(out_scene_root, dup_list)
+    
+    print("\nDone (COLMAP format).")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Copy a ScanNet++ scene and imbalance it by duplicating selected view(s) while keeping poses."
+        description="Copy a scene and imbalance it by duplicating selected view(s) while keeping poses. "
+                    "Supports ScanNet++ and MipNeRF-360/COLMAP formats."
     )
 
     parser.add_argument(
         "--data_root",
         type=str,
         default=str(Path("data/scenes/data")),
-        help="Root containing ScanNet++ scenes (default: data/scenes/data)",
+        help="Root containing scenes",
     )
     parser.add_argument("--scene_id", type=str, required=True, help="Input scene id (folder name under data_root)")
     parser.add_argument(
@@ -491,10 +774,23 @@ def main() -> int:
         help="Output (copied) scene id to create under data_root",
     )
     parser.add_argument(
+        "--format",
+        type=str,
+        choices=["auto", "scannetpp", "colmap"],
+        default="auto",
+        help="Dataset format: 'auto' (detect), 'scannetpp', or 'colmap' (MipNeRF-360) (default: auto)",
+    )
+    parser.add_argument(
         "--sensor",
         type=str,
         default="dslr",
-        help="Which sensor subfolder to imbalance (default: dslr)",
+        help="Sensor subfolder for ScanNet++ format (default: dslr)",
+    )
+    parser.add_argument(
+        "--llffhold",
+        type=int,
+        default=8,
+        help="LLFF-hold value for COLMAP format (every Nth for test, default: 8)",
     )
     parser.add_argument(
         "--subset_fraction",
@@ -561,6 +857,13 @@ def main() -> int:
         action="store_true",
         help="Best-effort update dino_features/features.pt by copying embeddings for duplicates",
     )
+    parser.add_argument(
+        "--images",
+        type=str,
+        default=None,
+        help="For COLMAP datasets: which images folder to keep (e.g., images_4). "
+             "If not specified, keeps all image folders. When specified, only that folder is copied.",
+    )
 
     args = parser.parse_args()
 
@@ -568,6 +871,22 @@ def main() -> int:
     in_scene_root = data_root / args.scene_id
     out_scene_root = data_root / args.out_scene_id
 
+    # Detect or use specified format
+    if args.format == "auto":
+        dataset_format = detect_format(in_scene_root, args.sensor)
+        print(f"Auto-detected format: {dataset_format}")
+    else:
+        dataset_format = args.format
+    
+    # =========================================================================
+    # COLMAP / MipNeRF-360 FORMAT
+    # =========================================================================
+    if dataset_format == "colmap":
+        return _imbalance_colmap_scene(args, in_scene_root, out_scene_root)
+    
+    # =========================================================================
+    # SCANNETPP FORMAT (original logic)
+    # =========================================================================
     in_sensor_root = in_scene_root / args.sensor
     out_sensor_root = out_scene_root / args.sensor
 
