@@ -4,15 +4,15 @@ This module provides different strategies for selecting which camera viewpoint
 to render from during training, replacing naive uniform sampling with more
 sophisticated approaches.
 
-Available strategies (matching slides terminology):
+Available strategies:
 - StackBasedSelector: Stack-based shuffle (default 3DGS baseline) - guaranteed uniform coverage
 - UniformRandomSelector: True uniform random with replacement
 - GeometricDiversitySelector: Pose-based heuristics for geometric diversity
 - ClusteringSelector: Cluster-based selection for spatial coverage
 - LossBasedSelector: Loss-driven selection prioritizing harder views
-- GaussianAwareSelector: Adaptive selection based on Gaussian visibility
-- ScheduledHybridSelector: Combines multiple selectors with time-dependent weights
-- VGGTSelector: VGGT-guided selection (optional advanced method)
+- DINOSelector: DINO feature-based diversity sampling
+- SequentialSelector: Deterministic sequential iteration
+- DeterministicMaxLossSelector: Always select highest-loss camera
 """
 
 from .selector import ViewSelector
@@ -21,42 +21,29 @@ from .geometric_selector import GeometricDiversitySelector
 from .clustering_selector import ClusteringSelector
 from .stack_selector import StackBasedSelector
 from .loss_selector import LossBasedSelector
-from .gaussian_aware_selector import GaussianAwareSelector
-from .scheduled_hybrid_selector import ScheduledHybridSelector, get_standard_config, STANDARD_CONFIGS
 from .sequential_selector import SequentialSelector
 from .deterministic_loss_selector import DeterministicMaxLossSelector
 from .logging_utils import configure_logging, get_logger
 
-# Optional selectors (may require extra deps / may be incomplete)
+# Optional selectors (may require extra deps)
 try:
     from .dino_selector import DINOSelector
 except Exception:  # pragma: no cover
     DINOSelector = None
 
-try:
-    from .vggt_selector import VGGTSelector
-except Exception:  # pragma: no cover
-    VGGTSelector = None
-
 # Registry mapping strategy names to classes
 SELECTOR_REGISTRY = {
-    # New names (matching slides)
     'stack': StackBasedSelector,
     'uniform_random': UniformRandomSelector,
     'geometric': GeometricDiversitySelector,
     'clustering': ClusteringSelector,
     'loss_based': LossBasedSelector,
-    'gaussian_aware': GaussianAwareSelector,
-    'scheduled_hybrid': ScheduledHybridSelector,
     'sequential': SequentialSelector,
     'deterministic_max_loss': DeterministicMaxLossSelector,
 }
 
 if DINOSelector is not None:
     SELECTOR_REGISTRY['dino'] = DINOSelector
-
-if VGGTSelector is not None:
-    SELECTOR_REGISTRY['vggt'] = VGGTSelector
 
 
 def build_selector(selector_type: str, config: dict = None, log_dir: str = None, verbose: bool = False, seed: int = None) -> ViewSelector:
@@ -65,15 +52,14 @@ def build_selector(selector_type: str, config: dict = None, log_dir: str = None,
 
     Args:
         selector_type: Name of the selector strategy. Options:
-            New names (recommended):
             - 'stack': Stack-based shuffle, default 3DGS baseline
             - 'uniform_random': True random with replacement
             - 'geometric': Geometric diversity from poses
             - 'clustering': Cluster-based selection
             - 'loss_based': Loss-driven selection
-            - 'gaussian_aware': Adaptive selection based on Gaussian visibility
-            - 'scheduled_hybrid': Combines multiple selectors
-            - 'vggt': VGGT-guided selection
+            - 'dino': DINO feature-based diversity
+            - 'sequential': Deterministic sequential iteration
+            - 'deterministic_max_loss': Always select highest-loss camera
 
         config: Configuration dictionary for the selector (strategy-specific)
         log_dir: Directory to save selection logs
@@ -122,21 +108,17 @@ def list_selectors():
 __all__ = [
     # Base class
     'ViewSelector',
-    # New names (primary)
+    # Selectors
     'StackBasedSelector',
     'UniformRandomSelector',
     'GeometricDiversitySelector',
     'ClusteringSelector',
     'LossBasedSelector',
-    'GaussianAwareSelector',
-    'ScheduledHybridSelector',
     'SequentialSelector',
     'DeterministicMaxLossSelector',
     # Utilities
     'build_selector',
     'list_selectors',
-    'get_standard_config',
-    'STANDARD_CONFIGS',
     'SELECTOR_REGISTRY',
     # Logging
     'configure_logging',
@@ -145,6 +127,3 @@ __all__ = [
 
 if DINOSelector is not None:
     __all__.append('DINOSelector')
-
-if VGGTSelector is not None:
-    __all__.append('VGGTSelector')

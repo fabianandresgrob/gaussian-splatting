@@ -649,8 +649,6 @@ if __name__ == "__main__":
             "geometric",
             "clustering",
             "loss_based",
-            "gaussian_aware",
-            "scheduled_hybrid",
             "dino",
             "sequential",
             "deterministic_max_loss",

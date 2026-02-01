@@ -2,32 +2,15 @@
 """
 Ablation Study Runner for 3D Gaussian Splatting View Selection Strategies.
 
-This script orchestrates large-scale ablation experiments comparing different
-view selection strategies for 3D Gaussian Splatting training.
+This script orchestrates ablation experiments comparing different view selection
+strategies for 3D Gaussian Splatting training.
 
 ================================================================================
-                              ABLATION STUDY PLAN
+                              EXPERIMENT CONFIGURATIONS
 ================================================================================
 
-OVERVIEW:
----------
-We evaluate view selection strategies across multiple axes:
-  1. Baselines (random sampling variants)
-  2. Standalone strategies (geometric, loss-based, feature-based)
-  3. Combined strategies (hybrid selectors with scheduling)
-  4. Hyperparameter sensitivity analysis
-
-EXPERIMENTAL SETUP:
--------------------
-  - Iterations: 30,000 per run
-  - Checkpoints: [1000, 5000, 10000, 15000, 20000, 30000] for early-stopping analysis
-  - Test evaluations: [1000, 2500, 5000, 7500, 10000, 12500, 15000, 17500, 20000, 25000, 30000]
-  - Metrics: PSNR, SSIM, LPIPS (computed on held-out test views)
-
-TIER 1: CORE ABLATIONS (10 scenes x 5 seeds = 50 runs per config)
------------------------------------------------------------------
-These are the primary experiments for the paper's main results table.
-
+AVAILABLE CONFIGS:
+------------------
     ID   | Strategy          | Description
     -----|-------------------|--------------------------------------------------
     B1   | stack             | Baseline: epoch-based shuffle (original 3DGS)
@@ -35,90 +18,23 @@ These are the primary experiments for the paper's main results table.
     S1   | geometric         | Standalone: geometric heuristics (pose diversity)
     S2   | loss_based        | Standalone: loss-weighted sampling (hard mining)
     S3   | dino              | Standalone: DINO feature diversity
-    C1   | hybrid_geo_loss   | Combined: Geo→Loss schedule (explore→exploit)
-    C2   | hybrid_all_three  | Combined: Geo+Loss+DINO phased schedule
     CL   | clustering        | Clustering: DBSCAN pose clustering (static)
-
-  Total Tier 1: 8 configs × 50 runs = 400 runs
-
-TIER 2: HYPERPARAMETER SENSITIVITY (3 scenes x 3 seeds = 9 runs per config)
----------------------------------------------------------------------------
-Secondary experiments to understand hyperparameter sensitivity.
-
-  Loss-Based Variations:
-  ID      | Strategy     | Variation
-  --------|--------------|--------------------------------------------------
-  L-T0.5  | loss_based   | temperature=0.5 (peakier distribution)
-  L-T2.0  | loss_based   | temperature=2.0 (more uniform)
-
-  Clustering: K-Means Variations:
-  ID      | Strategy     | Variation
-  --------|--------------|--------------------------------------------------
-  CL-5    | clustering   | n_clusters=5 (coarse clustering)
-  CL-20   | clustering   | n_clusters=20 (fine clustering)
-
-  Clustering: DBSCAN Variations:
-  ID            | Strategy     | Variation
-  --------------|--------------|----------------------------------------------
-  CL-DBSCAN     | clustering   | DBSCAN eps=0.5 (adaptive clusters, outliers)
-  CL-DBSCAN-tight| clustering  | DBSCAN eps=0.3 (more, smaller clusters)
-  CL-DBSCAN-loose| clustering  | DBSCAN eps=0.8 (fewer, larger clusters)
-
-  Hybrid Schedule Variations:
-  ID      | Strategy     | Variation
-  --------|--------------|--------------------------------------------------
-  H-static| hybrid       | Geo+Loss constant [0.5, 0.5] weights
-  H-cosine| hybrid       | Geo+Loss cosine annealing schedule
-  H-73    | hybrid       | Geo+Loss [0.7,0.3]→[0.3,0.7] (geo-heavy start)
-
-  New/Additional Strategies:
-  ID      | Strategy             | Variation
-  --------|----------------------|---------------------------------------------
-  SEQ     | sequential           | Deterministic sequential iteration (no randomness)
-  DML     | deterministic_max_loss | Always select highest-loss camera (expensive)
-
-  Total Tier 2: 12 configs × 9 runs = 108 runs
-
-HYBRID SCHEDULE RATIONALE:
---------------------------
-Loss-based selection requires loss history to be meaningful. Therefore:
-  - Early training (0-10k): Prioritize geometric/DINO diversity
-  - Mid training (10k-20k): Balanced selection
-  - Late training (20k-30k): Focus on high-loss (hard) views
-
-Schedule configurations:
-  - C1 (geo→loss): linear [0.8, 0.2] → [0.2, 0.8] over 30k iterations
-  - C2 (all three): step schedule with 3 phases
-      Phase 1 (0-10k):    [0.4, 0.1, 0.5]  # Geo+DINO heavy
-      Phase 2 (10k-20k):  [0.3, 0.4, 0.3]  # Balanced
-      Phase 3 (20k-30k):  [0.2, 0.6, 0.2]  # Loss-focused
-
-TOTAL RUNS:
------------
-    Tier 1: 400 runs
-  Tier 2: 108 runs
-  ─────────────────
-  Total:  508 runs
-
-  Estimated time: ~15-20 min/run @ 30k iters → 125-170 GPU-hours
 
 ================================================================================
 
 Usage:
-    # Run all Tier 1 experiments
-    python run_ablation.py --data_root /path/to/scenes --output_root /path/to/results
-
-    # Run specific tier
-    python run_ablation.py --tier 1 --data_root ... --output_root ...
+    # Run experiments on specific scenes and configs
+    python run_ablation.py --data_root /path/to/scenes --output_root /path/to/results \
+        --scenes scene1 scene2 --configs B1 S1 CL --seeds 0 1 2
 
     # Dry run (print what would be executed)
     python run_ablation.py --dry_run --data_root ... --output_root ...
 
     # Resume interrupted experiments
-    python run_ablation.py --resume --data_root ... --output_root ...
+    python run_ablation.py --data_root ... --output_root ...
 
-    # Run specific config IDs only
-    python run_ablation.py --configs B1 S1 C1 --data_root ... --output_root ...
+    # List all experiment configurations
+    python run_ablation.py --list_configs
 
 Author: ADL4CV Team
 Date: 2024
@@ -136,26 +52,18 @@ import logging
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional, Any
-from enum import Enum
 
 # ============================================================================
 #                           CONFIGURATION CLASSES
 # ============================================================================
 
-class Tier(Enum):
-    """Experiment tier classification."""
-    CORE = 1        # Primary ablations (full scenes × seeds)
-    SENSITIVITY = 2  # Hyperparameter sensitivity (reduced scenes × seeds)
-
-
 @dataclass
 class ExperimentConfig:
     """Configuration for a single experiment type."""
-    id: str                          # Unique identifier (e.g., "B1", "S1", "C1")
+    id: str                          # Unique identifier (e.g., "B1", "S1", "CL")
     name: str                        # Human-readable name
     strategy: str                    # View selection strategy name
     config: Dict[str, Any]           # Strategy-specific configuration
-    tier: Tier                       # Experiment tier
     description: str = ""            # Brief description for logging
     requires_dino: bool = False      # Whether this config needs DINO features
 
@@ -238,27 +146,21 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
     """
     configs = {}
 
-    # ========================================================================
-    # TIER 1: CORE ABLATIONS
-    # ========================================================================
-
     # --- Baselines ---
 
     configs["B1"] = ExperimentConfig(
         id="B1",
-        name="Baseline: No Replacement",
+        name="Baseline: Stack (No Replacement)",
         strategy="stack",
         config={},
-        tier=Tier.CORE,
         description="Original 3DGS epoch-based shuffle (stack-based selection)"
     )
 
     configs["B2"] = ExperimentConfig(
         id="B2",
-        name="Baseline: True Random",
+        name="Baseline: Uniform Random",
         strategy="uniform_random",
         config={},
-        tier=Tier.CORE,
         description="Uniform random sampling with replacement"
     )
 
@@ -266,112 +168,42 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
 
     configs["S1"] = ExperimentConfig(
         id="S1",
-        name="Standalone: Geometric",
+        name="Geometric",
         strategy="geometric",
         config={
-            "mode": "distance_to_selected",  # Dynamic mode (tracks recent selections)
+            "mode": "distance_to_selected",
             "temperature": 0.3,
-            "recency_window": 50,  # How many recent selections to consider
-            "use_cumulative_penalty": False,  # Don't track by uid
+            "recency_window": 50,
+            "use_cumulative_penalty": False,
         },
-        tier=Tier.CORE,
         description="Pose-based diversity with dynamic selection tracking"
     )
 
     configs["S2"] = ExperimentConfig(
         id="S2",
-        name="Standalone: Loss-Based",
+        name="Loss-Based",
         strategy="loss_based",
         config={
             "temperature": 0.3,
             "min_samples_before_bias": 0,
         },
-        tier=Tier.CORE,
-        description="Raw loss tracking (no EMA), prioritize high-loss views"
+        description="Raw loss tracking, prioritize high-loss views"
     )
 
     configs["S3"] = ExperimentConfig(
         id="S3",
-        name="Standalone: DINO Features",
+        name="DINO Features",
         strategy="dino",
         config={
             "embeddings_path": "auto",
             "require_embeddings": True,
             "temperature": 0.3,
             "diversity_mode": "distance_to_selected",
-            "recency_window": 50,  # How many recent selections to consider
+            "recency_window": 50,
             "normalize_embeddings": True,
-            "use_cumulative_penalty": False,  # Don't track by uid
+            "use_cumulative_penalty": False,
         },
-        tier=Tier.CORE,
-        description="DINO feature-based diversity sampling with selection tracking",
-        requires_dino=True
-    )
-
-    # --- Combined Strategies ---
-
-    # C1: Geometric → Loss (explore then exploit)
-    configs["C1"] = ExperimentConfig(
-        id="C1",
-        name="Combined: Geo→Loss Schedule",
-        strategy="scheduled_hybrid",
-        config={
-            "selectors": ["geometric", "loss_based"],
-            "schedule_type": "linear",
-            "weights_start": [0.8, 0.2],
-            "weights_end": [0.2, 0.8],
-            "max_iterations": 30000,
-            "temperature": 1.0,
-            # Sub-selector configs
-            "geometric_config": {
-                "mode": "distance_to_selected",
-                "temperature": 1.0,
-                "recency_window": 50,
-                "use_cumulative_penalty": False,
-            },
-            "loss_based_config": {
-                "temperature": 1.0,
-                "min_samples_before_bias": 5,
-            }
-        },
-        tier=Tier.CORE,
-        description="Linear transition from geometric (explore) to loss-based (exploit)"
-    )
-
-    # C2: All Three with phased schedule
-    configs["C2"] = ExperimentConfig(
-        id="C2",
-        name="Combined: All Three Phased",
-        strategy="scheduled_hybrid",
-        config={
-            "selectors": ["geometric", "loss_based", "dino"],
-            "schedule_type": "step",
-            "milestones": [
-                [0,     [0.4, 0.1, 0.5]],   # Phase 1: Geo+DINO (diversity)
-                [10000, [0.3, 0.4, 0.3]],   # Phase 2: Balanced
-                [20000, [0.2, 0.6, 0.2]],   # Phase 3: Loss-focused
-            ],
-            "temperature": 1.0,
-            "geometric_config": {
-                "mode": "distance_to_selected",
-                "temperature": 1.0,
-                "recency_window": 50,
-                "use_cumulative_penalty": False,
-            },
-            "loss_based_config": {
-                "temperature": 1.0,
-            },
-            "dino_config": {
-                "embeddings_path": "auto",
-                "require_embeddings": True,
-                "temperature": 1.0,
-                "diversity_mode": "distance_to_selected",
-                "recency_window": 50,
-                "use_cumulative_penalty": False,
-            }
-        },
-        tier=Tier.CORE,
-        description="Three-phase: Diversity→Balanced→Loss-focused",
+        description="DINO feature-based diversity sampling",
         requires_dino=True
     )
 
@@ -379,189 +211,25 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
 
     configs["CL"] = ExperimentConfig(
         id="CL",
-        name="Clustering: DBSCAN",
+        name="Clustering (DBSCAN)",
         strategy="clustering",
         config={
             "clustering_method": "dbscan",
-            "eps": 0.85,  # Neighborhood radius in standardized space
+            "eps": 0.85,
             "min_samples": 2,
             "temperature": 1.0,
             "use_orientation": True,
         },
-        tier=Tier.CORE,
-        description="DBSCAN clustering on camera poses, inverse cluster-size weighting (static)"
+        description="DBSCAN clustering on camera poses, inverse cluster-size weighting"
     )
 
-    # ========================================================================
-    # TIER 2: HYPERPARAMETER SENSITIVITY
-    # ========================================================================
-
-    # --- Loss-Based Temperature Variations ---
-
-    configs["L-T0.5"] = ExperimentConfig(
-        id="L-T0.5",
-        name="Loss-Based: Low Temperature",
-        strategy="loss_based",
-        config={
-            "temperature": 0.5,  # Peakier distribution
-            "min_samples_before_bias": 5
-        },
-        tier=Tier.SENSITIVITY,
-        description="Loss-based with temperature=0.5 (more peaked, stronger bias)"
-    )
-
-    configs["L-T2.0"] = ExperimentConfig(
-        id="L-T2.0",
-        name="Loss-Based: High Temperature",
-        strategy="loss_based",
-        config={
-            "temperature": 2.0,  # More uniform
-            "min_samples_before_bias": 5
-        },
-        tier=Tier.SENSITIVITY,
-        description="Loss-based with temperature=2.0 (more uniform, weaker bias)"
-    )
-
-    # --- Clustering Variations ---
-
-    configs["CL-5"] = ExperimentConfig(
-        id="CL-5",
-        name="Clustering: 5 Clusters",
-        strategy="clustering",
-        config={
-            "clustering_method": "kmeans",
-            "n_clusters": 5,  # Coarse clustering
-            "temperature": 1.0,
-            "use_orientation": True
-        },
-        tier=Tier.SENSITIVITY,
-        description="K-means with n_clusters=5 (coarse spatial grouping)"
-    )
-
-    configs["CL-20"] = ExperimentConfig(
-        id="CL-20",
-        name="Clustering: 20 Clusters",
-        strategy="clustering",
-        config={
-            "clustering_method": "kmeans",
-            "n_clusters": 20,  # Fine clustering
-            "temperature": 1.0,
-            "use_orientation": True
-        },
-        tier=Tier.SENSITIVITY,
-        description="K-means with n_clusters=20 (fine spatial grouping)"
-    )
-
-    # --- DBSCAN vs K-Means Comparison ---
-
-    configs["CL-DBSCAN"] = ExperimentConfig(
-        id="CL-DBSCAN",
-        name="Clustering: DBSCAN (default)",
-        strategy="clustering",
-        config={
-            "clustering_method": "dbscan",
-            "eps": 0.5,  # Neighborhood radius (in standardized space)
-            "min_samples": 3,  # Min points to form cluster
-            "temperature": 1.0,
-            "use_orientation": True
-        },
-        tier=Tier.SENSITIVITY,
-        description="DBSCAN clustering (adaptive cluster count, handles outliers)"
-    )
-
-    configs["CL-DBSCAN-tight"] = ExperimentConfig(
-        id="CL-DBSCAN-tight",
-        name="Clustering: DBSCAN (tight)",
-        strategy="clustering",
-        config={
-            "clustering_method": "dbscan",
-            "eps": 0.3,  # Smaller radius = more clusters
-            "min_samples": 2,
-            "temperature": 1.0,
-            "use_orientation": True
-        },
-        tier=Tier.SENSITIVITY,
-        description="DBSCAN with tight eps=0.3 (more, smaller clusters)"
-    )
-
-    configs["CL-DBSCAN-loose"] = ExperimentConfig(
-        id="CL-DBSCAN-loose",
-        name="Clustering: DBSCAN (loose)",
-        strategy="clustering",
-        config={
-            "clustering_method": "dbscan",
-            "eps": 0.8,  # Larger radius = fewer clusters
-            "min_samples": 3,
-            "temperature": 1.0,
-            "use_orientation": True
-        },
-        tier=Tier.SENSITIVITY,
-        description="DBSCAN with loose eps=0.8 (fewer, larger clusters)"
-    )
-
-    # --- Hybrid Schedule Variations ---
-
-    configs["H-static"] = ExperimentConfig(
-        id="H-static",
-        name="Hybrid: Static 50/50",
-        strategy="scheduled_hybrid",
-        config={
-            "selectors": ["geometric", "loss_based"],
-            "schedule_type": "linear",
-            "weights_start": [0.5, 0.5],
-            "weights_end": [0.5, 0.5],  # Constant weights
-            "max_iterations": 30000,
-            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 50, "use_cumulative_penalty": False},
-            "loss_based_config": {"temperature": 1.0}
-        },
-        tier=Tier.SENSITIVITY,
-        description="Constant 50/50 weighting (no schedule)"
-    )
-
-    configs["H-cosine"] = ExperimentConfig(
-        id="H-cosine",
-        name="Hybrid: Cosine Schedule",
-        strategy="scheduled_hybrid",
-        config={
-            "selectors": ["geometric", "loss_based"],
-            "schedule_type": "cosine",  # Smooth cosine annealing
-            "weights_start": [0.8, 0.2],
-            "weights_end": [0.2, 0.8],
-            "max_iterations": 30000,
-            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 50, "use_cumulative_penalty": False},
-            "loss_based_config": {"temperature": 1.0}
-        },
-        tier=Tier.SENSITIVITY,
-        description="Cosine annealing schedule (smoother transition)"
-    )
-
-    configs["H-73"] = ExperimentConfig(
-        id="H-73",
-        name="Hybrid: Geo-Heavy Start",
-        strategy="scheduled_hybrid",
-        config={
-            "selectors": ["geometric", "loss_based"],
-            "schedule_type": "linear",
-            "weights_start": [0.7, 0.3],
-            "weights_end": [0.3, 0.7],
-            "max_iterations": 30000,
-            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 50, "use_cumulative_penalty": False},
-            "loss_based_config": {"temperature": 1.0}
-        },
-        tier=Tier.SENSITIVITY,
-        description="More geometric-heavy start [0.7,0.3]→[0.3,0.7]"
-    )
-
-    # ========================================================================
-    # NEW STRATEGIES: Sequential and Deterministic Max-Loss
-    # ========================================================================
+    # --- Additional Strategies ---
 
     configs["SEQ"] = ExperimentConfig(
         id="SEQ",
-        name="Baseline: Sequential",
+        name="Sequential",
         strategy="sequential",
         config={},
-        tier=Tier.SENSITIVITY,
         description="Deterministic sequential iteration through cameras (no randomness)"
     )
 
@@ -570,8 +238,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         name="Deterministic Max-Loss",
         strategy="deterministic_max_loss",
         config={},
-        tier=Tier.SENSITIVITY,
-        description="Always select the camera with highest current loss (expensive, deterministic)"
+        description="Always select the camera with highest current loss (expensive)"
     )
 
     return configs
@@ -581,9 +248,8 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
 #                              SCENE DEFINITIONS
 # ============================================================================
 
-# Default scenes for experiments
-# ScanNet++ scene IDs
-DEFAULT_SCENES_TIER1 = [
+# Default scenes for experiments (ScanNet++ scene IDs)
+DEFAULT_SCENES = [
     "0c5385e84b",
     "5371eff4f9",
     "56a0ec536c",
@@ -596,16 +262,8 @@ DEFAULT_SCENES_TIER1 = [
     "f248c2bcdc",
 ]
 
-# Reduced set for hyperparameter sensitivity (Tier 2)
-DEFAULT_SCENES_TIER2 = [
-    "0c5385e84b",
-    "5371eff4f9",
-    "56a0ec536c",
-]
-
-# Seeds for reproducibility
-DEFAULT_SEEDS_TIER1 = [0, 1, 2, 3, 4]
-DEFAULT_SEEDS_TIER2 = [0, 1, 2]
+# Default seeds for reproducibility
+DEFAULT_SEEDS = [0, 1, 2, 3, 4]
 
 
 # ============================================================================
@@ -648,9 +306,8 @@ class AblationRunner:
 
     Features:
     - Resume capability: tracks completed runs in state file
-    - Parallel execution: optional multi-GPU support
     - Dry run mode: preview what would be executed
-    - Flexible filtering: run specific tiers or config IDs
+    - Flexible filtering: run specific config IDs
     """
 
     def __init__(
@@ -658,10 +315,8 @@ class AblationRunner:
         repo_path: str,
         data_root: str,
         output_root: str,
-        scenes_tier1: Optional[List[str]] = None,
-        scenes_tier2: Optional[List[str]] = None,
-        seeds_tier1: Optional[List[int]] = None,
-        seeds_tier2: Optional[List[int]] = None,
+        scenes: Optional[List[str]] = None,
+        seeds: Optional[List[int]] = None,
         logger_backend: str = "wandb",
         wandb_project: str = "3DGS",
         wandb_entity: str = "fabian-grob-technical-university-of-munich",
@@ -682,10 +337,8 @@ class AblationRunner:
             repo_path: Path to gaussian-splatting repository
             data_root: Root directory containing scene data
             output_root: Root directory for experiment outputs
-            scenes_tier1: List of scene names for Tier 1 experiments
-            scenes_tier2: List of scene names for Tier 2 experiments
-            seeds_tier1: List of seeds for Tier 1 experiments
-            seeds_tier2: List of seeds for Tier 2 experiments
+            scenes: List of scene names for experiments
+            seeds: List of seeds for experiments
             logger_backend: Logging backend ("tensorboard", "wandb", "none")
             wandb_project: W&B project name if using wandb
             wandb_entity: W&B entity/team name if using wandb
@@ -695,10 +348,8 @@ class AblationRunner:
         self.data_root = os.path.abspath(data_root)
         self.output_root = os.path.abspath(output_root)
 
-        self.scenes_tier1 = scenes_tier1 or DEFAULT_SCENES_TIER1
-        self.scenes_tier2 = scenes_tier2 or DEFAULT_SCENES_TIER2
-        self.seeds_tier1 = seeds_tier1 or DEFAULT_SEEDS_TIER1
-        self.seeds_tier2 = seeds_tier2 or DEFAULT_SEEDS_TIER2
+        self.scenes = scenes or DEFAULT_SCENES
+        self.seeds = seeds or DEFAULT_SEEDS
 
         self.logger_backend = logger_backend
         self.wandb_project = wandb_project
@@ -806,14 +457,12 @@ class AblationRunner:
 
     def generate_run_configs(
         self,
-        tier: Optional[int] = None,
         config_ids: Optional[List[str]] = None,
     ) -> List[RunConfig]:
         """
         Generate all run configurations based on filters.
 
         Args:
-            tier: Only include experiments from this tier (1 or 2)
             config_ids: Only include these specific config IDs
 
         Returns:
@@ -822,24 +471,12 @@ class AblationRunner:
         runs = []
 
         for config_id, exp_config in self.all_configs.items():
-            # Filter by tier
-            if tier is not None and exp_config.tier.value != tier:
-                continue
-
             # Filter by specific config IDs
             if config_ids is not None and config_id not in config_ids:
                 continue
 
-            # Determine scenes and seeds based on tier
-            if exp_config.tier == Tier.CORE:
-                scenes = self.scenes_tier1
-                seeds = self.seeds_tier1
-            else:
-                scenes = self.scenes_tier2
-                seeds = self.seeds_tier2
-
             # Generate runs for each scene × seed combination
-            for scene in scenes:
+            for scene in self.scenes:
                 scene_path = self._get_scene_path(scene)
 
                 if not os.path.exists(scene_path):
@@ -848,7 +485,7 @@ class AblationRunner:
                     )
                     continue
 
-                for seed in seeds:
+                for seed in self.seeds:
                     run = RunConfig(
                         experiment=exp_config,
                         scene=scene,
@@ -1073,7 +710,6 @@ class AblationRunner:
 
     def run(
         self,
-        tier: Optional[int] = None,
         config_ids: Optional[List[str]] = None,
         dry_run: bool = False,
         resume: bool = True,
@@ -1082,7 +718,6 @@ class AblationRunner:
         Run the ablation study.
 
         Args:
-            tier: Only run experiments from this tier (1 or 2)
             config_ids: Only run these specific config IDs
             dry_run: If True, just print what would be run
             resume: If True, skip already completed runs
@@ -1091,7 +726,7 @@ class AblationRunner:
             Summary dictionary with results
         """
         # Generate all run configurations
-        all_runs = self.generate_run_configs(tier=tier, config_ids=config_ids)
+        all_runs = self.generate_run_configs(config_ids=config_ids)
 
         self.logger.info("=" * 70)
         self.logger.info("ABLATION STUDY")
@@ -1100,8 +735,6 @@ class AblationRunner:
         self.logger.info(f"Output directory: {self.output_root}")
         self.logger.info(f"Data root: {self.data_root}")
         self.logger.info(f"Logger: {self.logger_backend}")
-        if tier:
-            self.logger.info(f"Tier filter: {tier}")
         if config_ids:
             self.logger.info(f"Config filter: {config_ids}")
         self.logger.info("=" * 70)
@@ -1186,41 +819,28 @@ class AblationRunner:
         print("EXPERIMENT CONFIGURATIONS")
         print("=" * 80)
 
-        for tier in [Tier.CORE, Tier.SENSITIVITY]:
-            tier_name = "TIER 1: CORE ABLATIONS" if tier == Tier.CORE else "TIER 2: SENSITIVITY"
-            print(f"\n{tier_name}")
-            print("-" * 80)
+        for config_id, config in self.all_configs.items():
+            print(f"\n  {config_id}: {config.name}")
+            print(f"      Strategy: {config.strategy}")
+            print(f"      Description: {config.description}")
 
-            for config_id, config in self.all_configs.items():
-                if config.tier != tier:
-                    continue
-
-                print(f"\n  {config_id}: {config.name}")
-                print(f"      Strategy: {config.strategy}")
-                print(f"      Description: {config.description}")
-
-                # Print key config params
-                if config.config:
-                    key_params = []
-                    for key, val in config.config.items():
-                        if not key.endswith("_config"):
-                            key_params.append(f"{key}={val}")
-                    if key_params:
-                        print(f"      Params: {', '.join(key_params[:3])}")
+            # Print key config params
+            if config.config:
+                key_params = []
+                for key, val in config.config.items():
+                    if not key.endswith("_config"):
+                        key_params.append(f"{key}={val}")
+                if key_params:
+                    print(f"      Params: {', '.join(key_params[:3])}")
 
         print("\n" + "=" * 80)
 
         # Count runs
-        tier1_configs = sum(1 for c in self.all_configs.values() if c.tier == Tier.CORE)
-        tier2_configs = sum(1 for c in self.all_configs.values() if c.tier == Tier.SENSITIVITY)
-
-        tier1_runs = tier1_configs * len(self.scenes_tier1) * len(self.seeds_tier1)
-        tier2_runs = tier2_configs * len(self.scenes_tier2) * len(self.seeds_tier2)
+        num_configs = len(self.all_configs)
+        total_runs = num_configs * len(self.scenes) * len(self.seeds)
 
         print("\nRUN COUNTS:")
-        print(f"  Tier 1: {tier1_configs} configs × {len(self.scenes_tier1)} scenes × {len(self.seeds_tier1)} seeds = {tier1_runs} runs")
-        print(f"  Tier 2: {tier2_configs} configs × {len(self.scenes_tier2)} scenes × {len(self.seeds_tier2)} seeds = {tier2_runs} runs")
-        print(f"  Total: {tier1_runs + tier2_runs} runs")
+        print(f"  {num_configs} configs × {len(self.scenes)} scenes × {len(self.seeds)} seeds = {total_runs} runs")
         print("=" * 80)
 
 
@@ -1235,11 +855,14 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Run all Tier 1 experiments
-    python run_ablation.py --tier 1 --data_root /path/to/scenes --output_root /path/to/results
+    # Run all experiments with default settings
+    python run_ablation.py --data_root /path/to/scenes --output_root /path/to/results
 
     # Run specific configs only
-    python run_ablation.py --configs B1 S1 C1 --data_root ... --output_root ...
+    python run_ablation.py --configs B1 S1 CL --data_root ... --output_root ...
+
+    # Run on specific scenes and seeds
+    python run_ablation.py --scenes scene1 scene2 --seeds 0 1 2 --data_root ... --output_root ...
 
     # Dry run (preview what would be executed)
     python run_ablation.py --dry_run --data_root ... --output_root ...
@@ -1272,16 +895,10 @@ Examples:
         help="Path to gaussian-splatting repository (default: current directory)"
     )
     parser.add_argument(
-        "--tier",
-        type=int,
-        choices=[1, 2],
-        help="Only run experiments from this tier"
-    )
-    parser.add_argument(
         "--configs",
         nargs="+",
         type=str,
-        help="Only run these specific config IDs (e.g., B1 S1 C1)"
+        help="Only run these specific config IDs (e.g., B1 S1 CL)"
     )
     parser.add_argument(
         "--dry_run",
@@ -1341,13 +958,13 @@ Examples:
         "--scenes",
         nargs="+",
         type=str,
-        help="Override default scenes for all tiers"
+        help="Override default scenes"
     )
     parser.add_argument(
         "--seeds",
         nargs="+",
         type=int,
-        help="Override default seeds for all tiers"
+        help="Override default seeds"
     )
 
     parser.add_argument(
@@ -1496,21 +1113,13 @@ def main():
     # Create output directory
     os.makedirs(args.output_root, exist_ok=True)
 
-    # Handle scene/seed overrides
-    scenes_tier1 = args.scenes if args.scenes else None
-    scenes_tier2 = args.scenes if args.scenes else None
-    seeds_tier1 = args.seeds if args.seeds else None
-    seeds_tier2 = args.seeds if args.seeds else None
-
     # Initialize runner
     runner = AblationRunner(
         repo_path=repo_path,
         data_root=args.data_root,
         output_root=args.output_root,
-        scenes_tier1=scenes_tier1,
-        scenes_tier2=scenes_tier2,
-        seeds_tier1=seeds_tier1,
-        seeds_tier2=seeds_tier2,
+        scenes=args.scenes,
+        seeds=args.seeds,
         logger_backend=args.logger,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
@@ -1544,7 +1153,6 @@ def main():
 
     # Run ablation
     results = runner.run(
-        tier=args.tier,
         config_ids=args.configs,
         dry_run=args.dry_run,
         resume=not args.no_resume,
