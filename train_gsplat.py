@@ -122,6 +122,7 @@ def training(
     view_selection_verbose: bool = True,
     skip_final_eval: bool = False,
     log_distribution_snapshots: bool = False,
+    eval_test_only: bool = False,
 ):
     print(f"positions: init={opt.position_lr_init} final={opt.position_lr_final} delay_mult={opt.position_lr_delay_mult} max_steps={opt.position_lr_max_steps}")
     print(f"feature={opt.feature_lr} opacity={opt.opacity_lr} scaling={opt.scaling_lr} rotation={opt.rotation_lr}")
@@ -327,7 +328,20 @@ def training(
     progress_bar = tqdm(range(start_iter, opt.iterations + 1), desc="Training progress")
     
     # List to store metrics for retrospective analysis
-    metrics_history = []
+    # Load existing history if resuming from checkpoint
+    metrics_history_path = os.path.join(dataset.model_path, "metrics_history.json")
+    if first_iter > 0 and os.path.exists(metrics_history_path):
+        try:
+            with open(metrics_history_path, "r") as f:
+                metrics_history = json.load(f)
+            # Filter to only keep entries up to first_iter (in case of partial writes)
+            metrics_history = [m for m in metrics_history if m.get("iteration", 0) <= first_iter]
+            print(f"[Checkpoint] Loaded {len(metrics_history)} metrics history entries (up to iter {first_iter})")
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[WARN] Could not load metrics_history.json: {e}, starting fresh")
+            metrics_history = []
+    else:
+        metrics_history = []
 
     def _save_checkpoint(iteration: int, suffix: str = "") -> None:
         filename = f"chkpnt{iteration}{suffix}.pth"
@@ -394,6 +408,7 @@ def training(
                     scene,
                     render,
                     (pipe, background),
+                    eval_test_only=eval_test_only,
                 )
 
                 if current_metrics:
@@ -478,7 +493,7 @@ def training(
         logger.finish()
 
 
-def training_report(logger, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene: Scene, renderFunc, renderArgs):
+def training_report(logger, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene: Scene, renderFunc, renderArgs, eval_test_only: bool = False):
     if logger:
         logger.add_scalar("train_loss_patches/l1_loss", Ll1.item(), iteration)
         logger.add_scalar("train_loss_patches/total_loss", loss.item(), iteration)
@@ -501,8 +516,11 @@ def training_report(logger, iteration, Ll1, loss, l1_loss, elapsed, testing_iter
         torch.cuda.empty_cache()
         validation_configs = (
             {"name": "test", "cameras": scene.getTestCameras()},
-            {"name": "train", "cameras": scene.getTrainCameras()[::10]},
         )
+        if not eval_test_only:
+            validation_configs = validation_configs + (
+                {"name": "train", "cameras": scene.getTrainCameras()[::10]},
+            )
         
         metrics_data = {"iteration": iteration, "elapsed_time": elapsed}
 
@@ -520,12 +538,13 @@ def training_report(logger, iteration, Ll1, loss, l1_loss, elapsed, testing_iter
                         viz_image = torch.nn.functional.interpolate(image.unsqueeze(0), scale_factor=0.25, mode="bilinear", align_corners=False)
                         logger.add_image(config["name"] + "_view_{}/render".format(viewpoint.image_name), viz_image, iteration)
 
-                    psnr_val = psnr(image, gt_image).mean()
+                    # Unsqueeze to [1, C, H, W] so psnr computes over all pixels, not per-channel
+                    psnr_val = psnr(image.unsqueeze(0), gt_image.unsqueeze(0)).item()
                     ssim_val = ssim(image, gt_image)
                     lpips_val = lpips_fn(image.unsqueeze(0), gt_image.unsqueeze(0))
 
                     l1_test += l1_loss(image, gt_image).mean().double()
-                    psnr_test += psnr_val.item()
+                    psnr_test += psnr_val
                     ssim_test += ssim_val.item()
                     lpips_test += lpips_val.item()
                 
@@ -677,6 +696,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--skip_final_eval", action="store_true",
                         help="Skip final eval_and_save() (useful for quick smoke tests / avoiding LPIPS OOM)")
+    parser.add_argument("--eval_test_only", action="store_true",
+                        help="Only evaluate on test set during training (skip train set eval, saves time for large/imbalanced datasets)")
     parser.add_argument(
         "--log_distribution_snapshots",
         action="store_true",
@@ -710,6 +731,7 @@ if __name__ == "__main__":
         disable_view_selection_logs=args.disable_view_selection_logs,
         view_selection_verbose=args.view_selection_verbose,
         log_distribution_snapshots=args.log_distribution_snapshots,
+        eval_test_only=args.eval_test_only,
     )
 
     print("\nTraining complete.")

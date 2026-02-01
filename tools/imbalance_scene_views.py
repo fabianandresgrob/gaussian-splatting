@@ -161,6 +161,59 @@ def _get_colmap_train_test_split(all_names: List[str], llffhold: int = 8) -> Dic
     return {"train": train_names, "test": test_names}
 
 
+def _get_or_create_colmap_test_split(
+    scene_root: Path,
+    all_names: List[str],
+    llffhold: int = 8,
+    write_if_missing: bool = True,
+) -> Dict[str, List[str]]:
+    """Get train/test split from test.txt if exists, otherwise compute and optionally save.
+    
+    This ensures consistent test sets across baseline and manipulated scenes.
+    The test.txt file is stored in sparse/0/test.txt and contains one image name per line.
+    
+    Args:
+        scene_root: Path to the scene root directory
+        all_names: List of all image names in the scene
+        llffhold: LLFF-hold value for computing split if test.txt doesn't exist
+        write_if_missing: If True, write test.txt to scene_root when computed
+        
+    Returns:
+        Dict with 'train' and 'test' lists of image names
+    """
+    test_txt_path = scene_root / "sparse" / "0" / "test.txt"
+    all_names_set = set(all_names)
+    
+    if test_txt_path.exists():
+        # Load existing test split
+        with open(test_txt_path, 'r') as f:
+            test_names = [line.strip() for line in f if line.strip()]
+        
+        # Validate all test images exist in current image list
+        missing = set(test_names) - all_names_set
+        if missing:
+            print(f"[WARN] test.txt contains {len(missing)} images not in current scene: {list(missing)[:5]}...")
+            # Filter to only existing images
+            test_names = [n for n in test_names if n in all_names_set]
+        
+        train_names = sorted([n for n in all_names if n not in set(test_names)])
+        print(f"[INFO] Loaded existing test split from {test_txt_path} ({len(test_names)} test images)")
+        return {"train": train_names, "test": test_names}
+    
+    # Compute split using LLFF-hold
+    split = _get_colmap_train_test_split(all_names, llffhold=llffhold)
+    
+    # Optionally save for future consistency
+    if write_if_missing:
+        test_txt_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(test_txt_path, 'w') as f:
+            for name in sorted(split["test"]):
+                f.write(name + '\n')
+        print(f"[INFO] Created test.txt at {test_txt_path} ({len(split['test'])} test images)")
+    
+    return split
+
+
 # ============================================================================
 #                          DATA CLASSES
 # ============================================================================
@@ -594,8 +647,11 @@ def _imbalance_colmap_scene(args, in_scene_root: Path, out_scene_root: Path) -> 
     images_dict = _read_colmap_images_bin(images_bin)
     all_names = [img["name"] for img in images_dict.values()]
     
-    # Get train/test split using LLFF-hold convention
-    split = _get_colmap_train_test_split(all_names, llffhold=args.llffhold)
+    # Get train/test split - use existing test.txt if present, otherwise create one
+    # This ensures consistent test sets across baseline and manipulated scenes
+    split = _get_or_create_colmap_test_split(
+        in_scene_root, all_names, llffhold=args.llffhold, write_if_missing=True
+    )
     train_files = sorted(split["train"])
     test_files = sorted(split["test"])
     

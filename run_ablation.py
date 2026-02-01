@@ -271,7 +271,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
         config={
             "mode": "distance_to_selected",  # Dynamic mode (tracks recent selections)
             "temperature": 0.3,
-            "recency_window": 69,  # How many recent selections to consider
+            "recency_window": 50,  # How many recent selections to consider
             "use_cumulative_penalty": False,  # Don't track by uid
         },
         tier=Tier.CORE,
@@ -299,7 +299,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "require_embeddings": True,
             "temperature": 0.3,
             "diversity_mode": "distance_to_selected",
-            "recency_window": 69,  # How many recent selections to consider
+            "recency_window": 50,  # How many recent selections to consider
             "normalize_embeddings": True,
             "use_cumulative_penalty": False,  # Don't track by uid
         },
@@ -326,7 +326,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "geometric_config": {
                 "mode": "distance_to_selected",
                 "temperature": 1.0,
-                "recency_window": 500,
+                "recency_window": 50,
                 "use_cumulative_penalty": False,
             },
             "loss_based_config": {
@@ -355,7 +355,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "geometric_config": {
                 "mode": "distance_to_selected",
                 "temperature": 1.0,
-                "recency_window": 500,
+                "recency_window": 50,
                 "use_cumulative_penalty": False,
             },
             "loss_based_config": {
@@ -366,7 +366,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
                 "require_embeddings": True,
                 "temperature": 1.0,
                 "diversity_mode": "distance_to_selected",
-                "recency_window": 500,
+                "recency_window": 50,
                 "use_cumulative_penalty": False,
             }
         },
@@ -511,7 +511,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "weights_start": [0.5, 0.5],
             "weights_end": [0.5, 0.5],  # Constant weights
             "max_iterations": 30000,
-            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500, "use_cumulative_penalty": False},
+            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 50, "use_cumulative_penalty": False},
             "loss_based_config": {"temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
@@ -528,7 +528,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "weights_start": [0.8, 0.2],
             "weights_end": [0.2, 0.8],
             "max_iterations": 30000,
-            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500, "use_cumulative_penalty": False},
+            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 50, "use_cumulative_penalty": False},
             "loss_based_config": {"temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
@@ -545,7 +545,7 @@ def get_all_experiment_configs() -> Dict[str, ExperimentConfig]:
             "weights_start": [0.7, 0.3],
             "weights_end": [0.3, 0.7],
             "max_iterations": 30000,
-            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 500, "use_cumulative_penalty": False},
+            "geometric_config": {"mode": "distance_to_selected", "temperature": 1.0, "recency_window": 50, "use_cumulative_penalty": False},
             "loss_based_config": {"temperature": 1.0}
         },
         tier=Tier.SENSITIVITY,
@@ -673,6 +673,7 @@ class AblationRunner:
         training_params: Optional[Dict[str, Any]] = None,
         no_save: bool = False,
         skip_final_eval: bool = False,
+        eval_test_only: bool = False,
     ):
         """
         Initialize the ablation runner.
@@ -713,6 +714,7 @@ class AblationRunner:
             self.training_params.update(training_params)
         self.no_save = no_save
         self.skip_final_eval = skip_final_eval
+        self.eval_test_only = eval_test_only
 
         # Load experiment configs
         self.all_configs = get_all_experiment_configs()
@@ -919,6 +921,8 @@ class AblationRunner:
             cmd.append("--no_save")
         if self.skip_final_eval:
             cmd.append("--skip_final_eval")
+        if self.eval_test_only:
+            cmd.append("--eval_test_only")
 
         # Add test iterations
         cmd.extend(["--test_iterations"] + [str(i) for i in self.training_params["test_iterations"]])
@@ -1422,6 +1426,11 @@ Examples:
         help="Pass --skip_final_eval to train_gsplat.py (avoid final LPIPS eval; useful for smoke tests)"
     )
     parser.add_argument(
+        "--eval_test_only",
+        action="store_true",
+        help="Only evaluate on test set during training (skip train set eval, saves time for large/imbalanced datasets)"
+    )
+    parser.add_argument(
         "--random_pcd",
         action="store_true",
         help="Use random point cloud initialization instead of COLMAP/dataset points"
@@ -1527,6 +1536,7 @@ def main():
         },
         no_save=args.no_save,
         skip_final_eval=args.skip_final_eval,
+        eval_test_only=args.eval_test_only,
     )
 
     # Print experiment summary

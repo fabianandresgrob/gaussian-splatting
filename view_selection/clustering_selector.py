@@ -114,25 +114,37 @@ class ClusteringSelector(ViewSelector):
             self.clusterer = DBSCAN(eps=self.eps, min_samples=self.min_samples)
             cluster_labels = self.clusterer.fit_predict(features_scaled)
 
-            # Handle noise points (-1 label) by assigning them to a separate "outlier" cluster
-            # Find the max cluster id (excluding -1)
+            # Handle noise points (-1 label) by assigning each to its own cluster.
+            # Rationale: DBSCAN noise points are images that are too dissimilar to 
+            # belong to any cluster - they represent unique viewpoints that carry
+            # valuable information. Treating each as its own singleton cluster ensures
+            # they receive appropriate sampling probability under inverse cluster-size
+            # weighting (each gets the maximum weight since cluster size = 1).
+            # Previously, all noise points were lumped into one "outlier" cluster,
+            # which severely underweighted them.
             max_cluster = cluster_labels.max()
-            outlier_cluster_id = max_cluster + 1 if max_cluster >= 0 else 0
-
-            # Replace -1 with outlier cluster id
+            next_cluster_id = max_cluster + 1 if max_cluster >= 0 else 0
+            
             cluster_labels_adjusted = cluster_labels.copy()
-            cluster_labels_adjusted[cluster_labels == -1] = outlier_cluster_id
+            noise_mask = cluster_labels == -1
+            n_noise = np.sum(noise_mask)
+            
+            if n_noise > 0:
+                # Assign each noise point its own unique cluster ID
+                noise_indices = np.where(noise_mask)[0]
+                for i, idx in enumerate(noise_indices):
+                    cluster_labels_adjusted[idx] = next_cluster_id + i
+
             cluster_labels = cluster_labels_adjusted
 
-            # Determine actual number of clusters (including outlier cluster if present)
+            # Determine actual number of clusters (regular + individual noise clusters)
             self.n_clusters = len(np.unique(cluster_labels))
 
             if self.verbose:
-                n_noise = np.sum(self.clusterer.labels_ == -1)
                 n_regular_clusters = len(np.unique(self.clusterer.labels_[self.clusterer.labels_ != -1]))
-                self.logger.debug(f"DBSCAN found {n_regular_clusters} clusters")
+                self.logger.debug(f"DBSCAN found {n_regular_clusters} regular clusters")
                 if n_noise > 0:
-                    self.logger.debug(f"{n_noise} noise points assigned to outlier cluster {outlier_cluster_id}")
+                    self.logger.debug(f"{n_noise} noise points -> {n_noise} singleton clusters (total: {self.n_clusters} clusters)")
 
         else:
             raise ValueError(f"Unknown clustering method: {self.clustering_method}. "
@@ -242,9 +254,15 @@ class ClusteringSelector(ViewSelector):
         Returns:
             Dictionary with cluster statistics
         """
+        # Count singleton clusters (likely from DBSCAN noise points)
+        n_singletons = sum(1 for size in self.cluster_sizes.values() if size == 1)
+        n_regular = self.n_clusters - n_singletons
+        
         stats = {
             'clustering_method': self.clustering_method,
             'n_clusters': self.n_clusters,
+            'n_regular_clusters': n_regular,
+            'n_singleton_clusters': n_singletons,
             'cluster_sizes': self.cluster_sizes,
         }
         return stats

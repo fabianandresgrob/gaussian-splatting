@@ -376,6 +376,7 @@ def run_ablation(
     resolution: int = 2,
     images: Optional[str] = None,
     data_device: str = "cpu",
+    eval_test_only: bool = False,
 ) -> int:
     """Run a single ablation experiment.
     
@@ -406,6 +407,9 @@ def run_ablation(
     
     if densification_multiplier != 1.0:
         cmd.extend(["--densification_multiplier", str(densification_multiplier)])
+    
+    if eval_test_only:
+        cmd.append("--eval_test_only")
     
     if extra_args:
         cmd.extend(extra_args)
@@ -454,6 +458,7 @@ def run_sparse_ablation(
     resolution: int = 2,
     images: Optional[str] = None,
     data_device: str = "cpu",
+    eval_test_only: bool = False,
 ):
     """Run sparse view ablation suite.
     
@@ -503,6 +508,7 @@ def run_sparse_ablation(
         resolution=resolution,
         images=images,
         data_device=data_device,
+        eval_test_only=eval_test_only,
     )
     
     # Step 3: Run ablation on each sparse level
@@ -531,6 +537,7 @@ def run_sparse_ablation(
             resolution=resolution,
             images=images,
             data_device=data_device,
+            eval_test_only=eval_test_only,
         )
 
 
@@ -683,6 +690,7 @@ def run_imbalance_ablation(
     resolution: int = 2,
     images: Optional[str] = None,
     data_device: str = "cpu",
+    eval_test_only: bool = False,
 ):
     """Run imbalance ablation suite.
     
@@ -745,6 +753,7 @@ def run_imbalance_ablation(
                 resolution=resolution,
                 images=images,
                 data_device=data_device,
+                eval_test_only=eval_test_only,
             )
     else:
         print("\n--- Running baseline (original scenes) ---")
@@ -763,6 +772,7 @@ def run_imbalance_ablation(
             resolution=resolution,
             images=images,
             data_device=data_device,
+            eval_test_only=eval_test_only,
         )
     
     # Step 3: Run ablation on each imbalance level
@@ -791,6 +801,7 @@ def run_imbalance_ablation(
             resolution=resolution,
             images=images,
             data_device=data_device,
+            eval_test_only=eval_test_only,
         )
 
 
@@ -879,6 +890,8 @@ Ablation Suites:
                         help="Print what would be run without executing")
     parser.add_argument("--no_resume", action="store_true",
                         help="Don't skip already completed runs")
+    parser.add_argument("--eval_test_only", action="store_true",
+                        help="Only evaluate on test set during training (skip train set eval, saves time for large/imbalanced datasets)")
     
     # Shared baseline options
     parser.add_argument("--shared_baseline_dir", type=str, default=None,
@@ -968,6 +981,7 @@ def main():
             resolution=args.resolution,
             images=args.images,
             data_device=args.data_device,
+            eval_test_only=args.eval_test_only,
         )
         # After sparse runs, update shared_baseline_dir to point to the new baseline
         if shared_baseline_dir is None:
@@ -995,6 +1009,7 @@ def main():
             resolution=args.resolution,
             images=args.images,
             data_device=args.data_device,
+            eval_test_only=args.eval_test_only,
         )
     
     if "densification" in suites and not args.create_scenes_only:

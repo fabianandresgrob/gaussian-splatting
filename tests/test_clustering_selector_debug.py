@@ -376,6 +376,92 @@ class TestClusteringSelectorDebug:
             for uid, p in cams:
                 print(f"    Camera {uid}: {p:.4f}")
 
+    def test_dbscan_noise_points_as_singletons(self, mock_gaussians):
+        """
+        Test that DBSCAN noise points are treated as individual singleton clusters.
+        
+        This is critical for imbalanced datasets where unique viewpoints (noise points)
+        should receive high sampling probability, not be lumped into one cluster.
+        """
+        print(f"\n{'='*60}")
+        print("DBSCAN NOISE POINTS AS SINGLETON CLUSTERS")
+        print(f"{'='*60}")
+
+        # Create cameras: one tight cluster + several isolated "noise" points
+        cameras = []
+        
+        # Cluster 0: 5 cameras very close together (will form a cluster)
+        for i in range(5):
+            offset = np.random.RandomState(i).randn(3) * 0.1  # Very tight
+            cam = MockCamera(uid=i, position=np.array([0, 0, 0]) + offset)
+            cameras.append(cam)
+        
+        # Add 3 isolated noise points (far apart, won't form clusters)
+        noise_positions = [
+            np.array([100, 0, 0]),   # Far from cluster 0
+            np.array([0, 100, 0]),   # Far from everything
+            np.array([50, 50, 50]),  # Also isolated
+        ]
+        for i, pos in enumerate(noise_positions):
+            cam = MockCamera(uid=5 + i, position=pos)
+            cameras.append(cam)
+        
+        # Use tight DBSCAN parameters to ensure noise points
+        config = {
+            "clustering_method": "dbscan",
+            "eps": 0.5,       # Small radius
+            "min_samples": 3,  # Requires 3 neighbors
+            "temperature": 1.0,
+            "use_orientation": False,
+        }
+        selector = ClusteringSelector(config=config, verbose=True, seed=42)
+        selector.initialize(cameras)
+        
+        print(f"\nTotal clusters: {selector.n_clusters}")
+        print(f"Cluster sizes: {selector.cluster_sizes}")
+        
+        # Get statistics
+        stats = selector.get_cluster_statistics()
+        n_singletons = stats['n_singleton_clusters']
+        n_regular = stats['n_regular_clusters']
+        
+        print(f"Regular clusters: {n_regular}")
+        print(f"Singleton clusters (noise points): {n_singletons}")
+        
+        # Verify: the 3 noise points should each be in their own singleton cluster
+        assert n_singletons == 3, f"Expected 3 singleton clusters for noise points, got {n_singletons}"
+        
+        # Compute probabilities
+        probs = selector.compute_probabilities(mock_gaussians, iteration=0)
+        
+        print("\nProbabilities:")
+        cluster_probs = {}
+        for cam in cameras:
+            c = selector.camera_clusters[cam.uid]
+            cluster_probs.setdefault(c, []).append((cam.uid, probs[cam.uid]))
+        
+        for cluster_id in sorted(cluster_probs.keys()):
+            cams_in_cluster = cluster_probs[cluster_id]
+            total = sum(p for _, p in cams_in_cluster)
+            size = len(cams_in_cluster)
+            print(f"  Cluster {cluster_id} (size={size}): total_prob={total:.4f}")
+            for uid, p in cams_in_cluster:
+                print(f"    Camera {uid}: prob={p:.4f}")
+        
+        # Key test: each noise point (singleton) should have HIGHER probability than
+        # each camera in the large cluster
+        large_cluster_cam_prob = probs[0]  # Camera 0 is in the large cluster
+        noise_point_prob = probs[5]  # Camera 5 is a noise point (singleton)
+        
+        print(f"\nLarge cluster camera prob: {large_cluster_cam_prob:.4f}")
+        print(f"Noise point (singleton) prob: {noise_point_prob:.4f}")
+        
+        assert noise_point_prob > large_cluster_cam_prob, \
+            f"Noise points should have higher probability than cameras in large clusters! " \
+            f"Got noise={noise_point_prob:.4f} vs cluster_cam={large_cluster_cam_prob:.4f}"
+        
+        print("\n✓ Noise points correctly receive higher sampling probability")
+
 
 # =============================================================================
 # Real Scene Loading (Optional)
