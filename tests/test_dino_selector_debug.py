@@ -187,7 +187,7 @@ class TestDINOSelectorDebug:
         prob_sum = sum(probs.values())
         print(f"\n  Probability sum: {prob_sum:.6f}")
         assert abs(prob_sum - 1.0) < 1e-6
-        print("  ✓ Probabilities sum to 1.0")
+        print("  [OK] Probabilities sum to 1.0")
 
         # --- Step 3: Check duplicates have same probability ---
         print(f"\n[Step 3] Checking duplicate embeddings:")
@@ -201,9 +201,9 @@ class TestDINOSelectorDebug:
         
         # Since duplicates have identical embeddings, they should have same probability
         if all(abs(p - orig_prob) < 0.01 for p in dup_probs):
-            print("  ✓ Duplicates have same probability as original (same embedding)")
+            print("  [OK] Duplicates have same probability as original (same embedding)")
         else:
-            print("  ✗ Duplicates should have same probability!")
+            print("  [FAIL] Duplicates should have same probability!")
 
         print(f"\n{'='*60}")
 
@@ -255,7 +255,7 @@ class TestDINOSelectorDebug:
             before = probs_initial[cam.uid]
             after = probs_after[cam.uid]
             change = after - before
-            marker = "↓" if change < -0.01 else ("↑" if change > 0.01 else "=")
+            marker = "down" if change < -0.01 else ("up" if change > 0.01 else "=")
             is_dup = cam.uid in duplicate_uids or cam.uid == 0
             dup_marker = " [DUP/ORIG]" if is_dup else ""
             print(f"    Camera {cam.uid:2d}: {before:.4f} -> {after:.4f} ({marker}){dup_marker}")
@@ -273,9 +273,9 @@ class TestDINOSelectorDebug:
         
         # Duplicates should have same (lowered) probability since they have same embedding
         if all(abs(p - orig_prob) < 0.01 for p in dup_probs):
-            print("  ✓ Duplicates penalized equally (feature-based diversity works!)")
+            print("  [OK] Duplicates penalized equally (feature-based diversity works!)")
         else:
-            print("  ✗ Check distance calculation - duplicates should match original")
+            print("  [FAIL] Check distance calculation - duplicates should match original")
 
         # --- Step 4: Run many iterations ---
         print(f"\n[Step 4] Running 500 iterations:")
@@ -310,11 +310,11 @@ class TestDINOSelectorDebug:
         print(f"    Expected if uniform: {expected_uniform:.1f}%")
         
         if actual < expected_uniform * 0.8:
-            print("    ✓ DINO selector is AVOIDING duplicates (feature-based diversity works!)")
+            print("    [OK] DINO selector is AVOIDING duplicates (feature-based diversity works!)")
         elif actual > expected_uniform * 1.2:
-            print("    ✗ DINO selector is OVER-selecting duplicates!")
+            print("    [FAIL] DINO selector is OVER-selecting duplicates!")
         else:
-            print("    ≈ Similar to uniform random")
+            print("    ~ Similar to uniform random")
 
         print(f"\n{'='*60}")
 
@@ -467,9 +467,9 @@ def run_debug_with_real_scene(scene_path: str):
                 
                 # Check if all have similar probability (should be identical)
                 if max(group_probs) - min(group_probs) < 0.01:
-                    print(f"    ✓ All duplicates have same probability")
+                    print(f"    [OK] All duplicates have same probability")
                 else:
-                    print(f"    ✗ Duplicates have different probabilities!")
+                    print(f"    [FAIL] Duplicates have different probabilities!")
     else:
         print(f"  No duplicate cameras found")
 

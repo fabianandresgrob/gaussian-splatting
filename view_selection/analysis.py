@@ -109,7 +109,7 @@ def plot_selection_frequency(
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"✓ Selection frequency plot saved to {output_path}")
+    print(f"[OK] Selection frequency plot saved to {output_path}")
 
 
 def plot_selection_over_time(
@@ -176,7 +176,7 @@ def plot_selection_over_time(
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"✓ Selection over time heatmap saved to {output_path}")
+    print(f"[OK] Selection over time heatmap saved to {output_path}")
 
 
 def plot_probability_evolution(
@@ -235,7 +235,7 @@ def plot_probability_evolution(
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"✓ Probability evolution plot saved to {output_path}")
+    print(f"[OK] Probability evolution plot saved to {output_path}")
 
 
 def plot_camera_positions_colored(
@@ -302,7 +302,7 @@ def plot_camera_positions_colored(
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"✓ Camera positions plot saved to {output_path}")
+    print(f"[OK] Camera positions plot saved to {output_path}")
 
 
 def compare_strategies(
@@ -355,7 +355,7 @@ def compare_strategies(
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"✓ Strategy comparison plot saved to {output_path}")
+    print(f"[OK] Strategy comparison plot saved to {output_path}")
 
 
 def export_summary_stats(df: pd.DataFrame, output_path: str) -> Dict:
@@ -423,7 +423,7 @@ def export_summary_stats(df: pd.DataFrame, output_path: str) -> Dict:
     with open(output_path, 'w') as f:
         json.dump(stats, f, indent=2)
 
-    print(f"✓ Summary statistics saved to {output_path}")
+    print(f"[OK] Summary statistics saved to {output_path}")
     print(f"  Gini coefficient: {stats['gini_coefficient']:.3f} (0=equal, 1=unequal)")
     print(f"  Normalized entropy: {stats['normalized_entropy']:.3f} (0=concentrated, 1=uniform)")
     print(f"  Coverage: {stats['coverage']:.1%}")
@@ -453,7 +453,7 @@ def create_analysis_report(
     try:
         # Load data
         df = load_selection_history(log_dir)
-        print(f"✓ Loaded {len(df)} selections")
+        print(f"[OK] Loaded {len(df)} selections")
 
         # Generate all plots
         plot_selection_frequency(df, os.path.join(output_dir, 'selection_frequency.png'))
@@ -473,10 +473,10 @@ def create_analysis_report(
             )
 
         print("=" * 60)
-        print(f"✓ Analysis report complete! Saved to {output_dir}")
+        print(f"[OK] Analysis report complete! Saved to {output_dir}")
 
     except Exception as e:
-        print(f"✗ Error creating analysis report: {e}")
+        print(f"[FAIL] Error creating analysis report: {e}")
         raise
 
 

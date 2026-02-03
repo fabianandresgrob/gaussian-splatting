@@ -475,7 +475,7 @@ class AblationRunner:
             if config_ids is not None and config_id not in config_ids:
                 continue
 
-            # Generate runs for each scene × seed combination
+            # Generate runs for each scene x seed combination
             for scene in self.scenes:
                 scene_path = self._get_scene_path(scene)
 
@@ -840,7 +840,7 @@ class AblationRunner:
         total_runs = num_configs * len(self.scenes) * len(self.seeds)
 
         print("\nRUN COUNTS:")
-        print(f"  {num_configs} configs × {len(self.scenes)} scenes × {len(self.seeds)} seeds = {total_runs} runs")
+        print(f"  {num_configs} configs x {len(self.scenes)} scenes x {len(self.seeds)} seeds = {total_runs} runs")
         print("=" * 80)
 
 

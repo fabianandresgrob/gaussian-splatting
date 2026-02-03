@@ -183,7 +183,7 @@ class TestGeometricSelectorDebug:
         prob_sum = sum(probs.values())
         print(f"\n  Probability sum: {prob_sum:.6f}")
         assert abs(prob_sum - 1.0) < 1e-6, f"Probabilities should sum to 1, got {prob_sum}"
-        print("  ✓ Probabilities sum to 1.0")
+        print("  [OK] Probabilities sum to 1.0")
 
         # --- Step 4: Verify static behavior ---
         print(f"\n[Step 4] Verifying static mode (probs unchanged after selection):")
@@ -199,9 +199,9 @@ class TestGeometricSelectorDebug:
                 break
         
         if not changed:
-            print("  ✓ Probabilities unchanged (static mode working)")
+            print("  [OK] Probabilities unchanged (static mode working)")
         else:
-            print("  ✗ Probabilities changed unexpectedly!")
+            print("  [FAIL] Probabilities changed unexpectedly!")
 
         print(f"\n{'='*60}")
         print("DEBUG COMPLETE")
@@ -242,7 +242,7 @@ class TestGeometricSelectorDebug:
         prob_sum = sum(probs_initial.values())
         print(f"\n  Probability sum: {prob_sum:.6f}")
         assert abs(prob_sum - 1.0) < 1e-6
-        print("  ✓ Probabilities sum to 1.0")
+        print("  [OK] Probabilities sum to 1.0")
 
         # --- Step 3: Select camera 0 and check how probabilities change ---
         print(f"\n[Step 3] Selecting Camera 0 and checking probability changes:")
@@ -263,7 +263,7 @@ class TestGeometricSelectorDebug:
             before = probs_initial[cam.uid]
             after = probs_after[cam.uid]
             change = after - before
-            marker = "↓" if change < -0.01 else ("↑" if change > 0.01 else "=")
+            marker = "down" if change < -0.01 else ("up" if change > 0.01 else "=")
             is_dup = cam.uid in duplicate_uids or cam.uid == 0
             dup_marker = " [DUP/ORIG]" if is_dup else ""
             print(f"    Camera {cam.uid:2d}: {before:.4f} -> {after:.4f} ({marker}){dup_marker}")
@@ -282,9 +282,9 @@ class TestGeometricSelectorDebug:
         # Since duplicates are at exact same position as camera 0, they should
         # have the same (reduced) probability after camera 0 is selected
         if dup_probs and all(abs(p - orig_prob) < 0.01 for p in dup_probs):
-            print("  ✓ Duplicates have same probability as original (correct - same position)")
+            print("  [OK] Duplicates have same probability as original (correct - same position)")
         else:
-            print("  ≈ Duplicates have different probability (check distance calculation)")
+            print("  ~ Duplicates have different probability (check distance calculation)")
 
         # --- Step 5: Run many iterations and track selection distribution ---
         print(f"\n[Step 5] Running 500 iterations to check selection distribution:")
@@ -320,11 +320,11 @@ class TestGeometricSelectorDebug:
         print(f"    Expected if uniform: {expected_uniform:.1f}%")
         
         if actual < expected_uniform * 0.8:
-            print("    ✓ Geometric selector is AVOIDING duplicated position!")
+            print("    [OK] Geometric selector is AVOIDING duplicated position!")
         elif actual > expected_uniform * 1.2:
-            print("    ✗ Geometric selector is OVER-selecting duplicated position!")
+            print("    [FAIL] Geometric selector is OVER-selecting duplicated position!")
         else:
-            print("    ≈ Similar to uniform random")
+            print("    ~ Similar to uniform random")
 
         print(f"\n{'='*60}")
         print("DEBUG COMPLETE")

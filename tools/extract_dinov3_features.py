@@ -12,13 +12,13 @@ DINOv3 offers significant improvements over DINOv2:
 
 Usage:
     # Extract features for all scenes (default: ViT-L/16)
-    python extract_dinov3_features.py --data_root ~/data/scenes/data
+    python tools/extract_dinov3_features.py --data_root ~/data/scenes/data
     
     # Extract for specific scene
-    python extract_dinov3_features.py --data_root ~/data/scenes/data --scene_id 5a269ba6fe
+    python tools/extract_dinov3_features.py --data_root ~/data/scenes/data --scene_id 5a269ba6fe
     
     # Use different model size
-    python extract_dinov3_features.py --data_root ~/data/scenes/data --model dinov3-vitb16
+    python tools/extract_dinov3_features.py --data_root ~/data/scenes/data --model dinov3-vitb16
 
 Output:
     Creates dino_features/features.pt under each scene containing:

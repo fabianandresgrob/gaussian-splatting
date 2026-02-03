@@ -204,7 +204,7 @@ class TestClusteringSelectorDebug:
         if dup_clusters:
             assert all(c == orig_cluster for c in dup_clusters), \
                 "FAIL: Duplicates should be in same cluster as original!"
-            print("  ✓ All duplicates correctly in same cluster")
+            print("  [OK] All duplicates correctly in same cluster")
 
         # --- Step 3: Compute initial probabilities ---
         print(f"\n[Step 3] Initial Probabilities:")
@@ -227,7 +227,7 @@ class TestClusteringSelectorDebug:
         prob_sum = sum(probs.values())
         print(f"\n  Probability sum: {prob_sum:.6f}")
         assert abs(prob_sum - 1.0) < 1e-6, f"Probabilities should sum to 1, got {prob_sum}"
-        print("  ✓ Probabilities sum to 1.0")
+        print("  [OK] Probabilities sum to 1.0")
 
         # --- Step 4: Make a selection ---
         print(f"\n[Step 4] Making first selection...")
@@ -248,13 +248,13 @@ class TestClusteringSelectorDebug:
             before_total = sum(probs[uid] for uid, _, _ in cams_in_cluster)
             after_total = sum(probs_after[uid] for uid, _, _ in cams_in_cluster)
             change = after_total - before_total
-            marker = "↓" if change < -0.001 else ("↑" if change > 0.001 else "=")
+            marker = "down" if change < -0.001 else ("up" if change > 0.001 else "=")
             if abs(change) > 0.001:
                 probs_changed = True
             print(f"    Cluster {cluster_id}: {before_total:.4f} -> {after_total:.4f} ({marker})")
         
         if not probs_changed:
-            print("  ✓ Probabilities are static (unchanged after selection)")
+            print("  [OK] Probabilities are static (unchanged after selection)")
 
         print(f"\n{'='*60}")
         print("DEBUG COMPLETE")
@@ -326,11 +326,11 @@ class TestClusteringSelectorDebug:
         # Key insight: cluster probability / cluster size means each dup gets LESS
         print(f"\n--- Analysis ---")
         if total_at_dup_position / n_iterations < expected_uniform / 100 * 0.8:
-            print("✓ Clustering is AVOIDING the duplicated position (good!)")
+            print("[OK] Clustering is AVOIDING the duplicated position (good!)")
         elif total_at_dup_position / n_iterations > expected_uniform / 100 * 1.2:
-            print("✗ Clustering is OVER-selecting the duplicated position (bad!)")
+            print("[FAIL] Clustering is OVER-selecting the duplicated position (bad!)")
         else:
-            print("≈ Clustering selection is similar to uniform random")
+            print("~ Clustering selection is similar to uniform random")
 
     def test_dbscan_clustering(self, cameras_clustered, mock_gaussians):
         """Test DBSCAN clustering which adapts cluster count automatically."""
@@ -460,7 +460,7 @@ class TestClusteringSelectorDebug:
             f"Noise points should have higher probability than cameras in large clusters! " \
             f"Got noise={noise_point_prob:.4f} vs cluster_cam={large_cluster_cam_prob:.4f}"
         
-        print("\n✓ Noise points correctly receive higher sampling probability")
+        print("\n[OK] Noise points correctly receive higher sampling probability")
 
 
 # =============================================================================
@@ -613,15 +613,15 @@ def run_debug_with_real_scene(scene_path: str):
                 unique_clusters = set(clusters)
                 
                 if len(unique_clusters) == 1:
-                    print(f"  ✓ '{base_name}' and its {len(group_cams)-1} duplicate(s) -> all in cluster {clusters[0]}")
+                    print(f"  [OK] '{base_name}' and its {len(group_cams)-1} duplicate(s) -> all in cluster {clusters[0]}")
                 else:
-                    print(f"  ✗ '{base_name}' duplicates are SPLIT across clusters: {clusters}")
+                    print(f"  [FAIL] '{base_name}' duplicates are SPLIT across clusters: {clusters}")
                     all_dups_same_cluster = False
         
         if all_dups_same_cluster:
-            print(f"\n  ✓ All duplicated cameras are correctly in the same cluster as their originals!")
+            print(f"\n  [OK] All duplicated cameras are correctly in the same cluster as their originals!")
         else:
-            print(f"\n  ✗ WARNING: Some duplicates are in different clusters than their originals!")
+            print(f"\n  [FAIL] WARNING: Some duplicates are in different clusters than their originals!")
     else:
         print(f"  No duplicate cameras found (no '__dup' in image names)")
 

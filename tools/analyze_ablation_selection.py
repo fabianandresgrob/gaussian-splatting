@@ -9,7 +9,7 @@ It summarizes *empirical* selection distributions (from actual selections):
 - histogram of selection counts
 
 Usage:
-  python examples/analyze_ablation_selection.py \
+  python tools/analyze_ablation_selection.py \
     --output_root output \
     --scene 5371eff4f9 \
     --seed 0 \

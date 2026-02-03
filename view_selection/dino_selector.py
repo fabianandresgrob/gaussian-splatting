@@ -11,7 +11,7 @@ Supports:
 
 Usage:
     1. First extract features for your scene:
-       python extract_dinov3_features.py --data_root ~/data/scenes/data --scene_id <scene_id>
+       python tools/extract_dinov3_features.py --data_root ~/data/scenes/data --scene_id <scene_id>
     
     2. Use the selector in training:
        config = {
@@ -50,7 +50,7 @@ class DINOSelector(ViewSelector):
           (for 'distance_to_selected' mode). Default: 50
         - normalize_embeddings (bool): L2 normalize embeddings. Default: True
 
-    Precomputed embeddings format (from extract_dinov3_features.py):
+    Precomputed embeddings format (from tools/extract_dinov3_features.py):
         {
             'DSC00001': tensor([...]),  # shape: (embedding_dim,)
             'DSC00002': tensor([...]),
@@ -219,7 +219,7 @@ class DINOSelector(ViewSelector):
         if not os.path.exists(self.embeddings_path):
             raise FileNotFoundError(
                 f"DINO embeddings not found: {self.embeddings_path}\n"
-                f"Run extract_dino_features.py first to precompute embeddings."
+                f"Run tools/extract_dinov3_features.py first to precompute embeddings."
             )
 
         self.logger.info(f"Loading embeddings from {self.embeddings_path}")

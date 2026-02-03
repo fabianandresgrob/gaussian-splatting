@@ -116,9 +116,9 @@ class TestStackSelectorDebug:
         print(f"\n  Unique cameras selected: {len(unique_first)}/{n_cameras}")
         
         if len(unique_first) == n_cameras:
-            print("  ✓ Each camera selected exactly once in first epoch")
+            print("  [OK] Each camera selected exactly once in first epoch")
         else:
-            print("  ✗ Some cameras missed or duplicated!")
+            print("  [FAIL] Some cameras missed or duplicated!")
 
         # --- Test 2: Second epoch (reshuffled) ---
         print(f"\n[Test 2] Second epoch (should be reshuffled):")
@@ -133,12 +133,12 @@ class TestStackSelectorDebug:
         
         unique_second = set(second_epoch)
         if len(unique_second) == n_cameras:
-            print("  ✓ Each camera selected exactly once in second epoch")
+            print("  [OK] Each camera selected exactly once in second epoch")
         
         if first_epoch != second_epoch:
-            print("  ✓ Order is different (reshuffled)")
+            print("  [OK] Order is different (reshuffled)")
         else:
-            print("  ≈ Same order (possible but unlikely)")
+            print("  ~ Same order (possible but unlikely)")
 
         print(f"\n{'='*60}")
 
@@ -189,7 +189,7 @@ class TestStackSelectorDebug:
         # All cameras should have same count (no position awareness)
         all_equal = all(c == expected_per_cam for c in selection_counts.values())
         if all_equal:
-            print("\n  ✓ All cameras selected equally (no duplicate awareness)")
+            print("\n  [OK] All cameras selected equally (no duplicate awareness)")
         
         print(f"\n  NOTE: Stack selector has NO duplicate awareness.")
         print(f"        Each camera (by uid) is treated independently.")
@@ -246,9 +246,9 @@ class TestUniformRandomSelectorDebug:
         # With 1000 iterations and 10 cameras, expect ~100 each
         # Reasonable variance should keep deviation under ~30%
         if max_deviation < 30:
-            print("  ✓ Distribution looks uniform (within expected variance)")
+            print("  [OK] Distribution looks uniform (within expected variance)")
         else:
-            print("  ⚠ High deviation - might want to check randomness")
+            print("  [WARN] High deviation - might want to check randomness")
 
         # Test probabilities
         probs = selector.compute_probabilities(mock_gaussians, iteration=0)
@@ -256,7 +256,7 @@ class TestUniformRandomSelectorDebug:
         
         is_uniform = all(abs(p - 1.0/n_cameras) < 1e-6 for p in probs.values())
         if is_uniform:
-            print("  ✓ Probabilities are exactly uniform")
+            print("  [OK] Probabilities are exactly uniform")
 
         print(f"\n{'='*60}")
 
@@ -353,9 +353,9 @@ class TestSequentialSelectorDebug:
         expected = expected[:n_selections]
         
         if selections == expected:
-            print("\n  ✓ Order is strictly sequential (0, 1, 2, ..., N-1, 0, 1, ...)")
+            print("\n  [OK] Order is strictly sequential (0, 1, 2, ..., N-1, 0, 1, ...)")
         else:
-            print("\n  ✗ Order is not sequential!")
+            print("\n  [FAIL] Order is not sequential!")
             print(f"    Expected: {expected}")
             print(f"    Got: {selections}")
 
@@ -367,9 +367,9 @@ class TestSequentialSelectorDebug:
         selections2 = [selector2.select_view(mock_gaussians, i).uid for i in range(n_selections)]
         
         if selections == selections2:
-            print("  ✓ Fully deterministic")
+            print("  [OK] Fully deterministic")
         else:
-            print("  ✗ Not deterministic!")
+            print("  [FAIL] Not deterministic!")
 
         print(f"\n{'='*60}")
 
@@ -399,9 +399,9 @@ class TestSequentialSelectorDebug:
             print(f"      Cameras with prob=0.0: {len(zeros)}")
             
             if len(ones) == 1 and ones[0] == current:
-                print(f"      ✓ Correct: only camera {current} has prob=1.0")
+                print(f"      [OK] Correct: only camera {current} has prob=1.0")
             else:
-                print(f"      ✗ Incorrect probabilities!")
+                print(f"      [FAIL] Incorrect probabilities!")
             
             # Make a selection to advance
             selector.select_view(mock_gaussians, iteration=i)

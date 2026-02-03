@@ -99,7 +99,7 @@ class TestLossSelectorDebug:
         Test that loss values are properly tracked and affect probabilities.
         
         Key behavior:
-        - Higher loss → Higher selection probability
+        - Higher loss -> Higher selection probability
         - No EMA smoothing (raw loss stored directly)
         """
         cameras = cameras_simple
@@ -135,9 +135,9 @@ class TestLossSelectorDebug:
         expected = 1.0 / len(cameras)
         is_uniform = all(abs(p - expected) < 1e-6 for p in probs.values())
         if is_uniform:
-            print(f"  ✓ Probabilities are uniform ({expected:.4f} each)")
+            print(f"  [OK] Probabilities are uniform ({expected:.4f} each)")
         else:
-            print(f"  ✗ Probabilities are NOT uniform!")
+            print(f"  [FAIL] Probabilities are NOT uniform!")
 
         # --- Step 3: Update losses for some cameras ---
         print(f"\n[Step 3] Updating losses:")
@@ -173,20 +173,20 @@ class TestLossSelectorDebug:
             loss = selector.losses[uid]
             samples = selector.loss_sample_counts[uid]
             expected_high = uid == 0  # Camera 0 should have highest prob
-            marker = " ← HIGH LOSS" if uid == 0 else (" ← LOW LOSS" if uid == 2 else "")
+            marker = " <- HIGH LOSS" if uid == 0 else (" <- LOW LOSS" if uid == 2 else "")
             print(f"    Camera {uid}: prob={prob:.4f}, loss={loss:.4f}, samples={samples}{marker}")
         
         # Verify high-loss camera has highest probability
         if sorted_probs[0][0] == 0:
-            print(f"\n  ✓ Camera 0 (highest loss) has highest probability")
+            print(f"\n  [OK] Camera 0 (highest loss) has highest probability")
         else:
-            print(f"\n  ✗ Camera 0 should have highest probability!")
+            print(f"\n  [FAIL] Camera 0 should have highest probability!")
 
         # Verify probabilities sum to 1
         prob_sum = sum(probs_after.values())
         print(f"\n  Probability sum: {prob_sum:.6f}")
         assert abs(prob_sum - 1.0) < 1e-6
-        print("  ✓ Probabilities sum to 1.0")
+        print("  [OK] Probabilities sum to 1.0")
 
         print(f"\n{'='*60}")
         print("DEBUG COMPLETE")
@@ -223,9 +223,9 @@ class TestLossSelectorDebug:
         expected = 1.0 / len(cameras)
         is_uniform = abs(probs[0] - expected) < 0.01
         if is_uniform:
-            print(f"  ✓ Probability still ~uniform (bias not active yet)")
+            print(f"  [OK] Probability still ~uniform (bias not active yet)")
         else:
-            print(f"  ✗ Probability should be uniform below threshold!")
+            print(f"  [FAIL] Probability should be uniform below threshold!")
 
         # Now update more cameras to exceed threshold
         print(f"\n[Test 2] All cameras get 5+ samples")
@@ -245,9 +245,9 @@ class TestLossSelectorDebug:
         
         # Now camera 0 should have highest probability
         if probs_after[0] > probs_after[1]:
-            print(f"\n  ✓ Camera 0 (high loss) now has higher probability than others")
+            print(f"\n  [OK] Camera 0 (high loss) now has higher probability than others")
         else:
-            print(f"\n  ✗ Loss bias not working correctly!")
+            print(f"\n  [FAIL] Loss bias not working correctly!")
 
         print(f"\n{'='*60}")
 
@@ -255,8 +255,8 @@ class TestLossSelectorDebug:
         """
         Test how temperature affects probability distribution.
         
-        Lower temperature → more peaked distribution (stronger bias)
-        Higher temperature → flatter distribution (weaker bias)
+        Lower temperature -> more peaked distribution (stronger bias)
+        Higher temperature -> flatter distribution (weaker bias)
         """
         cameras = cameras_simple
         print(f"\n{'='*60}")

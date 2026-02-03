@@ -136,7 +136,7 @@ def test_selector_registry(mock_cameras_simple):
         selector.initialize(mock_cameras_simple)
 
         assert selector.initialized, f"Selector '{selector_name}' failed to initialize"
-        print(f"✓ {selector_name} initialized successfully")
+        print(f"[OK] {selector_name} initialized successfully")
 
 
 # Test 2: compute_probabilities() sums to 1.0
@@ -264,7 +264,7 @@ def test_clustering_all_assigned(clustering_method, mock_cameras_diverse, mock_g
 
     # Get cluster statistics
     stats = selector.get_cluster_statistics()
-    print(f"✓ {clustering_method}: {stats['n_clusters']} clusters, "
+    print(f"[OK] {clustering_method}: {stats['n_clusters']} clusters, "
           f"sizes: {list(stats['cluster_sizes'].values())}")
 
 
@@ -295,7 +295,7 @@ def test_loss_based_selector_updates(mock_cameras_simple, mock_gaussians):
     total_samples = sum(selector.loss_sample_counts.values())
     assert total_samples == 30, f"Expected 30 loss updates, got {total_samples}"
 
-    print(f"✓ LossBasedSelector updated losses correctly")
+    print(f"[OK] LossBasedSelector updated losses correctly")
     print(f"  Losses: {dict(list(selector.losses.items())[:3])}")
 
 
@@ -320,7 +320,7 @@ def test_dbscan_noise_handling(mock_cameras_diverse, mock_gaussians):
 
     # Check if there's an outlier cluster (cluster with id >= n_regular_clusters)
     cluster_ids = list(selector.cluster_sizes.keys())
-    print(f"✓ DBSCAN with strict params: {len(cluster_ids)} total clusters")
+    print(f"[OK] DBSCAN with strict params: {len(cluster_ids)} total clusters")
     print(f"  Cluster sizes: {selector.cluster_sizes}")
 
 
@@ -347,7 +347,7 @@ def test_selection_statistics(mock_cameras_simple, mock_gaussians):
     assert stats['most_selected'] is not None, "Should have most selected camera"
     assert stats['least_selected'] is not None, "Should have least selected camera"
 
-    print(f"✓ Selection statistics tracked correctly")
+    print(f"[OK] Selection statistics tracked correctly")
     print(f"  Total: {stats['total_selections']}, Unique: {stats['unique_cameras']}")
     print(f"  Most selected: camera {stats['most_selected'][0]} ({stats['most_selected'][1]} times)")
 

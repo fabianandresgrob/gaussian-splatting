@@ -107,11 +107,11 @@ class LossBasedSelector(ViewSelector):
 
     def compute_probabilities(self, gaussians, iteration: int) -> Dict[int, float]:
         """
-        Compute sampling probabilities based on EMA losses.
+        Compute sampling probabilities based on the most recent per-camera losses.
 
         Strategy:
         - If not enough samples collected yet, use uniform sampling
-        - Otherwise, cameras with higher EMA loss get higher probability
+        - Otherwise, cameras with higher recent loss get higher probability
         - Use softmax to convert loss scores to valid probabilities
 
         Args:
@@ -214,7 +214,7 @@ class LossBasedSelector(ViewSelector):
                         f"unique cameras: {selection_stats.get('unique_cameras', 0)}")
 
         if loss_stats:
-            self.logger.info(f"  Loss: mean={loss_stats['mean_loss']:.6f} ± {loss_stats['std_loss']:.6f}, "
+            self.logger.info(f"  Loss: mean={loss_stats['mean_loss']:.6f} +/- {loss_stats['std_loss']:.6f}, "
                   f"range=[{loss_stats['min_loss']:.6f}, {loss_stats['max_loss']:.6f}]")
             self.logger.info(f"  Samples: count=[{loss_stats['min_sample_count']}, {loss_stats['max_sample_count']}], "
                   f"total={loss_stats['total_loss_updates']}")
